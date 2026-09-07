@@ -7,3 +7,6 @@ x64/
 debug/
 release/
 .git/
+*.exe
+third_party/bullet3/build/
+third_party/bullet3/*.obj

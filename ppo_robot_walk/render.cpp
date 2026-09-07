@@ -19,9 +19,9 @@ void floordata() {
 				white = false;
 			}
 			else {
-				t.r = 0.6f;
-				t.g = 0.6f;
-				t.b = 0.6f;
+				t.r = 0.5f;
+				t.g = 0.5f;
+				t.b = 0.5f;
 				t.opacity = 1.0f;
 				floorquads.push_back(t);
 				white = true;

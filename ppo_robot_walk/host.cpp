@@ -23,13 +23,16 @@ int main()
 	ImGui_ImplOpenGL3_Init(glsl_version);
 	noRender.movementSpeed = 20.0f;
 	initfloor();
+	initrobot();
 	while(noRender.isWindowOpen())
 	{
 		noRender.updateCamera();
 		noRender.setInputBlocked(io.WantCaptureMouse || io.WantCaptureKeyboard);
 		noRender.pollEvents();
 		noRender.clearScreen(0.1f, 0.1f, 0.1f);
+		updaterobot();
 		renderfloor();
+		renderRobot();
 		renderUI();
 		noRender.swapBuffers();
 	}
