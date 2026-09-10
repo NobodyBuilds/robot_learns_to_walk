@@ -2,7 +2,7 @@
 cd /d "%~dp0"
 if not exist "..\third_party\bullet3\build\msvc\bullet3.lib" call build_bullet.bat
 if errorlevel 1 exit /b 1
-nvcc -std=c++17 -rdc=true -Xcompiler "/std:c++17 /MD" -o D:\visual_studio\ppo_robot_walk\robot_walks.exe host.cpp render.cpp ui.cpp robot.cu D:\glad\src\glad.c ^
+nvcc -std=c++17 -rdc=true -Xcompiler "/std:c++17 /MD" -o D:\visual_studio\ppo_robot_walk\robot_walks.exe host.cpp render.cpp ui.cpp robot.cu network.cu D:\glad\src\glad.c ^
   "D:\visual_studio\imgui-1.91.1\imgui.cpp" ^
   "D:\visual_studio\imgui-1.91.1\imgui_draw.cpp" ^
   "D:\visual_studio\imgui-1.91.1\imgui_tables.cpp" ^

@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
-#include <iostream>
 #include <vector>
 
 #include <btBulletDynamicsCommon.h>
@@ -19,15 +19,6 @@
 #include "render.h"
 #include "vars.h"
 
-// Bullet Physics is the only physics implementation in this file. CUDA is
-// used only for the existing raw-triangle renderer and device observations.
-// PPO can later observe the device root pose/velocities, all shoulder/hip
-// pitch-sideways-twist vars, elbow/knee/waist joint vars, robotMoveX/Y/Z, and
-// robotPartTouchingGround plus the named contact flags. The action values can
-// use those same device vars; this file does not implement PPO.
-
-//ai was used for this as im not capable for adding a whole physics system from scratch 
-
 #define PI 3.14159265358979323846f
 #define RAD(x) ((x) * PI / 180.0f)
 #define NUM_PARTS 15
@@ -35,24 +26,24 @@
 #define TOTAL_TRIS (NUM_PARTS * TRIS_PER_PART)
 #define ROBOT_INTEROP_ID 1
 
-#define WAIST_MIN      -30.0f
-#define WAIST_MAX       50.0f
-#define HIP_MIN         -30.0f
-#define HIP_MAX         100.0f
-#define HIPROLL_MIN     -10.0f
-#define HIPROLL_MAX      45.0f
-#define KNEE_MIN          0.0f
-#define KNEE_MAX        140.0f
-#define SHOULDER_MIN    -60.0f
-#define SHOULDER_MAX    170.0f
-#define SHOULDER_SIDE_MIN  -90.0f
-#define SHOULDER_SIDE_MAX   90.0f
-#define SHOULDER_TWIST_MIN -90.0f
-#define SHOULDER_TWIST_MAX  90.0f
+#define WAIST_MIN          -30.0f
+#define WAIST_MAX           50.0f
+#define HIP_MIN             -30.0f
+#define HIP_MAX             100.0f
+#define HIPROLL_MIN         -10.0f
+#define HIPROLL_MAX          45.0f
+#define KNEE_MIN              0.0f
+#define KNEE_MAX            140.0f
+#define SHOULDER_MIN        -60.0f
+#define SHOULDER_MAX        170.0f
+#define SHOULDER_SIDE_MIN   -90.0f
+#define SHOULDER_SIDE_MAX    90.0f
+#define SHOULDER_TWIST_MIN  -90.0f
+#define SHOULDER_TWIST_MAX   90.0f
 #define HIP_TWIST_MIN       -45.0f
 #define HIP_TWIST_MAX        45.0f
-#define ELBOW_MIN         0.0f
-#define ELBOW_MAX       150.0f
+#define ELBOW_MIN             0.0f
+#define ELBOW_MAX           150.0f
 
 enum RobotAnchor {
     A_HEADTOP = 0, A_HEADBASE, A_CHEST, A_PELVIS,
@@ -92,11 +83,11 @@ static const PartSpec PART_SPECS[NUM_PARTS] = {
     { -0.12f, 0.12f,  0.00f, 0.91f, -0.14f, 0.14f, A_RKNEE, A_RANKLE },
     { -0.13f, 0.13f, -0.15f, 0.34f, -0.09f, 0.05f, A_RANKLE, A_RTOE },
     { -0.12f, 0.12f, -0.05f, 0.63f, -0.12f, 0.12f, A_LSHOULDER, A_LELBOW },
-    { -0.095f,0.095f,  0.00f, 0.58f, -0.10f, 0.10f, A_LELBOW, A_LWRIST },
-    { -0.085f,0.085f,  0.60f, 0.88f, -0.08f, 0.08f, A_LELBOW, A_LWRIST },
+    { -0.095f, 0.095f,  0.00f, 0.58f, -0.10f, 0.10f, A_LELBOW, A_LWRIST },
+    { -0.085f, 0.085f,  0.60f, 0.88f, -0.08f, 0.08f, A_LELBOW, A_LWRIST },
     { -0.12f, 0.12f, -0.05f, 0.63f, -0.12f, 0.12f, A_RSHOULDER, A_RELBOW },
-    { -0.095f,0.095f,  0.00f, 0.58f, -0.10f, 0.10f, A_RELBOW, A_RWRIST },
-    { -0.085f,0.085f,  0.60f, 0.88f, -0.08f, 0.08f, A_RELBOW, A_RWRIST },
+    { -0.095f, 0.095f,  0.00f, 0.58f, -0.10f, 0.10f, A_RELBOW, A_RWRIST },
+    { -0.085f, 0.085f,  0.60f, 0.88f, -0.08f, 0.08f, A_RELBOW, A_RWRIST },
 };
 
 static const float REST_POSE[NUM_ANCHORS][3] = {
@@ -118,11 +109,8 @@ struct RobotRenderTransform {
     float3 axisZ;
 };
 
-// rawTriangles3D stores one RGB color for the whole triangle. noRender's
-// interop VBO is a regular vertex stream, so the color must be expanded to
-// every vertex before OpenGL consumes it.
 struct InteropRawTriangle3D {
-    float data[18]; // (x, y, z, r, g, b) for each of 3 vertices
+    float data[18];
 };
 
 struct BulletPart {
@@ -149,40 +137,48 @@ struct BallMotor {
     btVector3 upper;
 };
 
-static btDiscreteDynamicsWorld* g_world = nullptr;
-static btDefaultCollisionConfiguration* g_collisionConfig = nullptr;
-static btCollisionDispatcher* g_dispatcher = nullptr;
-static btBroadphaseInterface* g_broadphase = nullptr;
-static btSequentialImpulseConstraintSolver* g_solver = nullptr;
-static btRigidBody* g_groundBody = nullptr;
-static btBoxShape* g_groundShape = nullptr;
-static btGeneric6DofSpring2Constraint* g_waist = nullptr;
-static BulletPart g_parts[NUM_PARTS];
-static std::vector<btTypedConstraint*> g_constraints;
-static std::vector<HingeMotor> g_hingeMotors;
-static std::vector<BallMotor> g_ballMotors;
-static float g_shapeScale = 1.0f;
+// Each entry owns an independent Bullet world. d_body stays a flat
+// [robot_count] array, while contacts and constraints remain isolated.
+struct RobotPhysics {
+    btDiscreteDynamicsWorld* world = nullptr;
+    btDefaultCollisionConfiguration* collisionConfig = nullptr;
+    btCollisionDispatcher* dispatcher = nullptr;
+    btBroadphaseInterface* broadphase = nullptr;
+    btSequentialImpulseConstraintSolver* solver = nullptr;
+    btRigidBody* groundBody = nullptr;
+    btBoxShape* groundShape = nullptr;
+    btGeneric6DofSpring2Constraint* waist = nullptr;
+    BulletPart parts[NUM_PARTS] = {};
+    std::vector<btTypedConstraint*> constraints;
+    std::vector<HingeMotor> hingeMotors;
+    std::vector<BallMotor> ballMotors;
+    float shapeScale = 1.0f;
+};
+
+static std::vector<RobotPhysics> g_robots;
+static std::vector<body> h_bodies;
+static int g_robot_count = 0;
+static body* g_last_device_body = nullptr;
+static int g_last_device_body_count = 0;
+static bool g_device_body_initialized = false;
+
 static cudaGraphicsResource* g_robotInteropResource = nullptr;
 static bool g_robotInteropReady = false;
+static int g_render_triangle_count = 0;
+static rawTriangles3D* d_robot_geom = nullptr;
+static std::vector<RobotRenderTransform> h_robot_transforms;
+static RobotRenderTransform* d_robot_transforms = nullptr;
 static std::chrono::steady_clock::time_point g_lastPhysicsUpdate;
 static bool g_havePhysicsUpdateTime = false;
 
-// Preserved device-side controls used by the existing syncvar interface.
-__device__ float g_ragdollTimer = 0.0f;
-__device__ float g_muscleScale = 1.0f;
-
 float h_ragdollTimer = 0.0f;
 float h_muscleStrength = 1.0f;
-rawTriangles3D* d_robot_geom = nullptr;
-RobotRenderTransform h_robot_transforms[NUM_PARTS] = {};
-RobotRenderTransform* d_robot_transforms = nullptr;
+__device__ float g_ragdollTimer = 0.0f;
+__device__ float g_muscleScale = 1.0f;
 
 static float safeScale(float scale) { return scale > 0.001f ? scale : 1.0f; }
 static float clampf(float v, float lo, float hi) { return std::max(lo, std::min(hi, v)); }
 
-// vars.h keeps drag as a per-120 Hz velocity-retention value.  Convert that
-// to Bullet's per-second damping coefficient so a value such as 0.98 does not
-// accidentally behave like almost-zero damping.
 static float bulletLinearDamping() {
     float retention = clampf(h_drag, 0.0f, 0.999999f);
     return clampf(1.0f - std::pow(retention, 120.0f), 0.0f, 1.0f);
@@ -215,12 +211,42 @@ static btTransform worldFrame(const btVector3& pivot, const btMatrix3x3& basis) 
     return frame;
 }
 
-static btTransform localFrame(btRigidBody* body, const btTransform& frame) {
-    return body->getWorldTransform().inverse() * frame;
+static btTransform localFrame(btRigidBody* rigidBody, const btTransform& frame) {
+    return rigidBody->getWorldTransform().inverse() * frame;
 }
 
-static btRigidBody* makeRigidBody(int part, float mass, const btVector3& center,
-    const btMatrix3x3& basis, float scale) {
+static void destroyRobotPhysics(RobotPhysics& robot) {
+    if (robot.world) {
+        for (btTypedConstraint* constraint : robot.constraints)
+            robot.world->removeConstraint(constraint);
+        for (btTypedConstraint* constraint : robot.constraints)
+            delete constraint;
+        robot.constraints.clear();
+        robot.hingeMotors.clear();
+        robot.ballMotors.clear();
+        robot.waist = nullptr;
+
+        for (BulletPart& part : robot.parts) {
+            if (part.body) robot.world->removeRigidBody(part.body);
+            delete part.body;
+            delete part.shape;
+            part = {};
+        }
+        if (robot.groundBody) robot.world->removeRigidBody(robot.groundBody);
+        delete robot.groundBody;
+        delete robot.groundShape;
+    }
+
+    delete robot.world;
+    delete robot.solver;
+    delete robot.broadphase;
+    delete robot.dispatcher;
+    delete robot.collisionConfig;
+    robot = {};
+}
+
+static btRigidBody* makeRigidBody(RobotPhysics& robot, int part, float mass,
+    const btVector3& center, const btMatrix3x3& basis, float scale) {
     const PartSpec& spec = PART_SPECS[part];
     btVector3 halfExtents((spec.x1 - spec.x0) * 0.5f,
         (spec.y1 - spec.y0) * 0.5f, (spec.z1 - spec.z0) * 0.5f);
@@ -230,41 +256,43 @@ static btRigidBody* makeRigidBody(int part, float mass, const btVector3& center,
     btVector3 inertia(0, 0, 0);
     shape->calculateLocalInertia(mass, inertia);
     btRigidBody::btRigidBodyConstructionInfo info(mass, nullptr, shape, inertia);
-    btRigidBody* body = new btRigidBody(info);
-    body->setWorldTransform(worldFrame(center, basis));
-    body->setFriction(clampf(h_friction, 0.0f, 1.0f));
-    body->setRestitution(clampf(h_bounce, 0.0f, 1.0f));
-    body->setDamping(bulletLinearDamping(), 0.04f);
-    body->setActivationState(DISABLE_DEACTIVATION);
-    body->setUserIndex(part);
-    g_parts[part] = { body, shape };
-    g_world->addRigidBody(body);
-    return body;
+    btRigidBody* rigidBody = new btRigidBody(info);
+    rigidBody->setWorldTransform(worldFrame(center, basis));
+    rigidBody->setFriction(clampf(h_friction, 0.0f, 1.0f));
+    rigidBody->setRestitution(clampf(h_bounce, 0.0f, 1.0f));
+    rigidBody->setDamping(bulletLinearDamping(), 0.04f);
+    rigidBody->setActivationState(DISABLE_DEACTIVATION);
+    rigidBody->setUserIndex(part);
+    robot.parts[part] = { rigidBody, shape };
+    robot.world->addRigidBody(rigidBody);
+    return rigidBody;
 }
 
-static void addFixedJoint(btRigidBody* parent, btRigidBody* child, const btVector3& pivot) {
+static void addFixedJoint(RobotPhysics& robot, btRigidBody* parent, btRigidBody* child,
+    const btVector3& pivot) {
     btTransform frame = worldFrame(pivot, parent->getWorldTransform().getBasis());
     btFixedConstraint* joint = new btFixedConstraint(
         *parent, *child, localFrame(parent, frame), localFrame(child, frame));
-    g_world->addConstraint(joint, true);
-    g_constraints.push_back(joint);
+    robot.world->addConstraint(joint, true);
+    robot.constraints.push_back(joint);
 }
 
-static void addHingeJoint(btRigidBody* parent, btRigidBody* child, const btVector3& pivot,
-    const btVector3& axis, float low, float high, MotorInput input) {
+static void addHingeJoint(RobotPhysics& robot, btRigidBody* parent, btRigidBody* child,
+    const btVector3& pivot, const btVector3& axis, float low, float high, MotorInput input) {
     btTransform frame = worldFrame(pivot, basisAroundAxis(axis));
     btHingeConstraint* joint = new btHingeConstraint(
         *parent, *child, localFrame(parent, frame), localFrame(child, frame), true);
     joint->setLimit(RAD(low), RAD(high));
     joint->setMaxMotorImpulse(30.0f);
     joint->enableMotor(true);
-    g_world->addConstraint(joint, true);
-    g_constraints.push_back(joint);
-    g_hingeMotors.push_back({ joint, input, low, high });
+    robot.world->addConstraint(joint, true);
+    robot.constraints.push_back(joint);
+    robot.hingeMotors.push_back({ joint, input, low, high });
 }
 
-static void addBallJoint(btRigidBody* parent, btRigidBody* child, const btVector3& pivot,
-    const btVector3& lower, const btVector3& upper, BallMotorInput input) {
+static void addBallJoint(RobotPhysics& robot, btRigidBody* parent, btRigidBody* child,
+    const btVector3& pivot, const btVector3& lower, const btVector3& upper,
+    BallMotorInput input) {
     btTransform frame = worldFrame(pivot, btMatrix3x3::getIdentity());
     btGeneric6DofSpring2Constraint* joint = new btGeneric6DofSpring2Constraint(
         *parent, *child, localFrame(parent, frame), localFrame(child, frame), RO_XYZ);
@@ -278,84 +306,53 @@ static void addBallJoint(btRigidBody* parent, btRigidBody* child, const btVector
         joint->setTargetVelocity(axis, 8.0f);
         joint->setMaxMotorForce(axis, 35.0f);
     }
-    g_world->addConstraint(joint, true);
-    g_constraints.push_back(joint);
-    g_ballMotors.push_back({ joint, input, lower, upper });
+    robot.world->addConstraint(joint, true);
+    robot.constraints.push_back(joint);
+    robot.ballMotors.push_back({ joint, input, lower, upper });
 }
 
-static void addWaistJoint(btRigidBody* pelvis, btRigidBody* torso, const btVector3& pivot) {
+static void addWaistJoint(RobotPhysics& robot, btRigidBody* pelvis, btRigidBody* torso,
+    const btVector3& pivot) {
     btTransform frame = worldFrame(pivot, btMatrix3x3::getIdentity());
-    g_waist = new btGeneric6DofSpring2Constraint(
+    robot.waist = new btGeneric6DofSpring2Constraint(
         *pelvis, *torso, localFrame(pelvis, frame), localFrame(torso, frame));
-    g_waist->setLinearLowerLimit(btVector3(0, 0, 0));
-    g_waist->setLinearUpperLimit(btVector3(0, 0, 0));
-    g_waist->setAngularLowerLimit(btVector3(RAD(WAIST_MIN), 0.0f, RAD(HIPROLL_MIN)));
-    g_waist->setAngularUpperLimit(btVector3(RAD(WAIST_MAX), 0.0f, RAD(HIPROLL_MAX)));
+    robot.waist->setLinearLowerLimit(btVector3(0, 0, 0));
+    robot.waist->setLinearUpperLimit(btVector3(0, 0, 0));
+    robot.waist->setAngularLowerLimit(btVector3(RAD(WAIST_MIN), 0.0f, RAD(HIPROLL_MIN)));
+    robot.waist->setAngularUpperLimit(btVector3(RAD(WAIST_MAX), 0.0f, RAD(HIPROLL_MAX)));
     for (int axis = 3; axis <= 5; axis++) {
-        g_waist->enableMotor(axis, true);
-        g_waist->setServo(axis, true);
-        g_waist->setTargetVelocity(axis, 8.0f);
-        g_waist->setMaxMotorForce(axis, 40.0f);
+        robot.waist->enableMotor(axis, true);
+        robot.waist->setServo(axis, true);
+        robot.waist->setTargetVelocity(axis, 8.0f);
+        robot.waist->setMaxMotorForce(axis, 40.0f);
     }
-    g_world->addConstraint(g_waist, true);
-    g_constraints.push_back(g_waist);
+    robot.world->addConstraint(robot.waist, true);
+    robot.constraints.push_back(robot.waist);
 }
 
-static void destroyBulletWorld() {
-    if (g_world) {
-        for (btTypedConstraint* constraint : g_constraints) g_world->removeConstraint(constraint);
-        for (btTypedConstraint* constraint : g_constraints) delete constraint;
-        g_constraints.clear();
-        g_hingeMotors.clear();
-        g_ballMotors.clear();
-        g_waist = nullptr;
-        for (BulletPart& part : g_parts) {
-            if (part.body) g_world->removeRigidBody(part.body);
-            delete part.body;
-            delete part.shape;
-            part = {};
-        }
-        if (g_groundBody) g_world->removeRigidBody(g_groundBody);
-        delete g_groundBody;
-        delete g_groundShape;
-        g_groundBody = nullptr;
-        g_groundShape = nullptr;
-    }
-    delete g_world;
-    delete g_solver;
-    delete g_broadphase;
-    delete g_dispatcher;
-    delete g_collisionConfig;
-    g_world = nullptr;
-    g_solver = nullptr;
-    g_broadphase = nullptr;
-    g_dispatcher = nullptr;
-    g_collisionConfig = nullptr;
-}
+static void createRobotPhysics(RobotPhysics& robot, const btVector3& root) {
+    destroyRobotPhysics(robot);
+    robot.collisionConfig = new btDefaultCollisionConfiguration();
+    robot.dispatcher = new btCollisionDispatcher(robot.collisionConfig);
+    robot.broadphase = new btDbvtBroadphase();
+    robot.solver = new btSequentialImpulseConstraintSolver();
+    robot.world = new btDiscreteDynamicsWorld(robot.dispatcher, robot.broadphase,
+        robot.solver, robot.collisionConfig);
+    robot.world->setGravity(btVector3(0, h_gravity, 0));
 
-static void createBulletWorld() {
-    destroyBulletWorld();
-    g_collisionConfig = new btDefaultCollisionConfiguration();
-    g_dispatcher = new btCollisionDispatcher(g_collisionConfig);
-    g_broadphase = new btDbvtBroadphase();
-    g_solver = new btSequentialImpulseConstraintSolver();
-    g_world = new btDiscreteDynamicsWorld(g_dispatcher, g_broadphase, g_solver, g_collisionConfig);
-    g_world->setGravity(btVector3(0, h_gravity, 0));
-
-    g_groundShape = new btBoxShape(btVector3(floorwidth * 0.5f, 0.5f, floorheight * 0.5f));
+    robot.groundShape = new btBoxShape(btVector3(floorwidth * 0.5f, 0.5f, floorheight * 0.5f));
     btTransform groundTransform;
     groundTransform.setIdentity();
     groundTransform.setOrigin(btVector3(floorX, floorY - 0.5f, floorZ));
-    btRigidBody::btRigidBodyConstructionInfo groundInfo(0.0f, nullptr, g_groundShape);
-    g_groundBody = new btRigidBody(groundInfo);
-    g_groundBody->setWorldTransform(groundTransform);
-    g_groundBody->setFriction(clampf(h_friction, 0.0f, 1.0f));
-    g_groundBody->setRestitution(clampf(h_bounce, 0.0f, 1.0f));
-    g_groundBody->setUserIndex(-1);
-    g_world->addRigidBody(g_groundBody);
+    btRigidBody::btRigidBodyConstructionInfo groundInfo(0.0f, nullptr, robot.groundShape);
+    robot.groundBody = new btRigidBody(groundInfo);
+    robot.groundBody->setWorldTransform(groundTransform);
+    robot.groundBody->setFriction(clampf(h_friction, 0.0f, 1.0f));
+    robot.groundBody->setRestitution(clampf(h_bounce, 0.0f, 1.0f));
+    robot.groundBody->setUserIndex(-1);
+    robot.world->addRigidBody(robot.groundBody);
 
     const float scale = safeScale(h_robotScale);
-    const btVector3 root(h_robotX, h_robotY, h_robotZ);
     for (int part = 0; part < NUM_PARTS; part++) {
         const PartSpec& spec = PART_SPECS[part];
         btVector3 a = restPoint(spec.anchorA, root, scale);
@@ -369,95 +366,100 @@ static void createBulletWorld() {
         else if (part == PART_HEAD) mass = 2.0f;
         else if (part == PART_LUPPERLEG || part == PART_RUPPERLEG) mass = 3.0f;
         else if (part == PART_LLOWERLEG || part == PART_RLOWERLEG) mass = 2.0f;
-        makeRigidBody(part, mass, center, basis, scale);
+        makeRigidBody(robot, part, mass, center, basis, scale);
     }
 
-    addWaistJoint(g_parts[PART_PELVIS].body, g_parts[PART_TORSO].body,
+    addWaistJoint(robot, robot.parts[PART_PELVIS].body, robot.parts[PART_TORSO].body,
         restPoint(A_PELVIS, root, scale));
-    addFixedJoint(g_parts[PART_TORSO].body, g_parts[PART_HEAD].body,
+    addFixedJoint(robot, robot.parts[PART_TORSO].body, robot.parts[PART_HEAD].body,
         restPoint(A_HEADBASE, root, scale));
-    addBallJoint(g_parts[PART_PELVIS].body, g_parts[PART_LUPPERLEG].body,
+    addBallJoint(robot, robot.parts[PART_PELVIS].body, robot.parts[PART_LUPPERLEG].body,
         restPoint(A_LHIP, root, scale),
         btVector3(RAD(HIP_MIN), RAD(HIPROLL_MIN), RAD(HIP_TWIST_MIN)),
         btVector3(RAD(HIP_MAX), RAD(HIPROLL_MAX), RAD(HIP_TWIST_MAX)), BALL_LEFT_HIP);
-    addBallJoint(g_parts[PART_PELVIS].body, g_parts[PART_RUPPERLEG].body,
+    addBallJoint(robot, robot.parts[PART_PELVIS].body, robot.parts[PART_RUPPERLEG].body,
         restPoint(A_RHIP, root, scale),
         btVector3(RAD(HIP_MIN), RAD(HIPROLL_MIN), RAD(HIP_TWIST_MIN)),
         btVector3(RAD(HIP_MAX), RAD(HIPROLL_MAX), RAD(HIP_TWIST_MAX)), BALL_RIGHT_HIP);
-    addHingeJoint(g_parts[PART_LUPPERLEG].body, g_parts[PART_LLOWERLEG].body,
+    addHingeJoint(robot, robot.parts[PART_LUPPERLEG].body, robot.parts[PART_LLOWERLEG].body,
         restPoint(A_LKNEE, root, scale), btVector3(1, 0, 0), KNEE_MIN, KNEE_MAX, MOTOR_LEFT_KNEE);
-    addHingeJoint(g_parts[PART_RUPPERLEG].body, g_parts[PART_RLOWERLEG].body,
+    addHingeJoint(robot, robot.parts[PART_RUPPERLEG].body, robot.parts[PART_RLOWERLEG].body,
         restPoint(A_RKNEE, root, scale), btVector3(1, 0, 0), KNEE_MIN, KNEE_MAX, MOTOR_RIGHT_KNEE);
-    addFixedJoint(g_parts[PART_LLOWERLEG].body, g_parts[PART_LFOOT].body,
+    addFixedJoint(robot, robot.parts[PART_LLOWERLEG].body, robot.parts[PART_LFOOT].body,
         restPoint(A_LANKLE, root, scale));
-    addFixedJoint(g_parts[PART_RLOWERLEG].body, g_parts[PART_RFOOT].body,
+    addFixedJoint(robot, robot.parts[PART_RLOWERLEG].body, robot.parts[PART_RFOOT].body,
         restPoint(A_RANKLE, root, scale));
-    addBallJoint(g_parts[PART_TORSO].body, g_parts[PART_LUPPERARM].body,
+    addBallJoint(robot, robot.parts[PART_TORSO].body, robot.parts[PART_LUPPERARM].body,
         restPoint(A_LSHOULDER, root, scale),
         btVector3(RAD(SHOULDER_MIN), RAD(SHOULDER_SIDE_MIN), RAD(SHOULDER_TWIST_MIN)),
-        btVector3(RAD(SHOULDER_MAX), RAD(SHOULDER_SIDE_MAX), RAD(SHOULDER_TWIST_MAX)), BALL_LEFT_SHOULDER);
-    addBallJoint(g_parts[PART_TORSO].body, g_parts[PART_RUPPERARM].body,
+        btVector3(RAD(SHOULDER_MAX), RAD(SHOULDER_SIDE_MAX), RAD(SHOULDER_TWIST_MAX)),
+        BALL_LEFT_SHOULDER);
+    addBallJoint(robot, robot.parts[PART_TORSO].body, robot.parts[PART_RUPPERARM].body,
         restPoint(A_RSHOULDER, root, scale),
         btVector3(RAD(SHOULDER_MIN), RAD(SHOULDER_SIDE_MIN), RAD(SHOULDER_TWIST_MIN)),
-        btVector3(RAD(SHOULDER_MAX), RAD(SHOULDER_SIDE_MAX), RAD(SHOULDER_TWIST_MAX)), BALL_RIGHT_SHOULDER);
-    addHingeJoint(g_parts[PART_LUPPERARM].body, g_parts[PART_LFOREARM].body,
-        restPoint(A_LELBOW, root, scale), btVector3(1, 0, 0), ELBOW_MIN, ELBOW_MAX, MOTOR_LEFT_ELBOW);
-    addHingeJoint(g_parts[PART_RUPPERARM].body, g_parts[PART_RFOREARM].body,
-        restPoint(A_RELBOW, root, scale), btVector3(1, 0, 0), ELBOW_MIN, ELBOW_MAX, MOTOR_RIGHT_ELBOW);
-    addFixedJoint(g_parts[PART_LFOREARM].body, g_parts[PART_LHAND].body,
+        btVector3(RAD(SHOULDER_MAX), RAD(SHOULDER_SIDE_MAX), RAD(SHOULDER_TWIST_MAX)),
+        BALL_RIGHT_SHOULDER);
+    addHingeJoint(robot, robot.parts[PART_LUPPERARM].body, robot.parts[PART_LFOREARM].body,
+        restPoint(A_LELBOW, root, scale), btVector3(1, 0, 0), ELBOW_MIN, ELBOW_MAX,
+        MOTOR_LEFT_ELBOW);
+    addHingeJoint(robot, robot.parts[PART_RUPPERARM].body, robot.parts[PART_RFOREARM].body,
+        restPoint(A_RELBOW, root, scale), btVector3(1, 0, 0), ELBOW_MIN, ELBOW_MAX,
+        MOTOR_RIGHT_ELBOW);
+    addFixedJoint(robot, robot.parts[PART_LFOREARM].body, robot.parts[PART_LHAND].body,
         restPoint(A_LWRIST, root, scale));
-    addFixedJoint(g_parts[PART_RFOREARM].body, g_parts[PART_RHAND].body,
+    addFixedJoint(robot, robot.parts[PART_RFOREARM].body, robot.parts[PART_RHAND].body,
         restPoint(A_RWRIST, root, scale));
+    robot.shapeScale = scale;
 }
 
-static float motorTarget(MotorInput input) {
+static float motorTarget(const body& state, MotorInput input) {
     switch (input) {
-    case MOTOR_LEFT_SHOULDER: return clampf(h_leftShoulderJoint, SHOULDER_MIN, SHOULDER_MAX);
-    case MOTOR_RIGHT_SHOULDER: return clampf(h_rightShoulderJoint, SHOULDER_MIN, SHOULDER_MAX);
-    case MOTOR_LEFT_ELBOW: return clampf(h_leftElbowJoint, ELBOW_MIN, ELBOW_MAX);
-    case MOTOR_RIGHT_ELBOW: return clampf(h_rightElbowJoint, ELBOW_MIN, ELBOW_MAX);
-    case MOTOR_LEFT_HIP: return clampf(h_leftUpperLegJoint, HIP_MIN, HIP_MAX);
-    case MOTOR_RIGHT_HIP: return clampf(h_rightUpperLegJoint, HIP_MIN, HIP_MAX);
-    case MOTOR_LEFT_KNEE: return clampf(h_leftKneeJoint, KNEE_MIN, KNEE_MAX);
-    case MOTOR_RIGHT_KNEE: return clampf(h_rightKneeJoint, KNEE_MIN, KNEE_MAX);
+    case MOTOR_LEFT_SHOULDER: return clampf(state.leftShoulderJoint, SHOULDER_MIN, SHOULDER_MAX);
+    case MOTOR_RIGHT_SHOULDER: return clampf(state.rightShoulderJoint, SHOULDER_MIN, SHOULDER_MAX);
+    case MOTOR_LEFT_ELBOW: return clampf(state.leftElbowJoint, ELBOW_MIN, ELBOW_MAX);
+    case MOTOR_RIGHT_ELBOW: return clampf(state.rightElbowJoint, ELBOW_MIN, ELBOW_MAX);
+    case MOTOR_LEFT_HIP: return clampf(state.leftUpperLegJoint, HIP_MIN, HIP_MAX);
+    case MOTOR_RIGHT_HIP: return clampf(state.rightUpperLegJoint, HIP_MIN, HIP_MAX);
+    case MOTOR_LEFT_KNEE: return clampf(state.leftKneeJoint, KNEE_MIN, KNEE_MAX);
+    case MOTOR_RIGHT_KNEE: return clampf(state.rightKneeJoint, KNEE_MIN, KNEE_MAX);
     }
     return 0.0f;
 }
 
-static btVector3 ballMotorTarget(BallMotorInput input) {
+static btVector3 ballMotorTarget(const body& state, BallMotorInput input) {
     switch (input) {
     case BALL_LEFT_SHOULDER:
-        return btVector3(RAD(h_leftShoulderJoint), RAD(h_leftShoulderJointSideways),
-            RAD(h_leftShoulderJointTwist));
+        return btVector3(RAD(state.leftShoulderJoint), RAD(state.leftShoulderJointSideways),
+            RAD(state.leftShoulderJointTwist));
     case BALL_RIGHT_SHOULDER:
-        return btVector3(RAD(h_rightShoulderJoint), RAD(h_rightShoulderJointSideways),
-            RAD(h_rightShoulderJointTwist));
+        return btVector3(RAD(state.rightShoulderJoint), RAD(state.rightShoulderJointSideways),
+            RAD(state.rightShoulderJointTwist));
     case BALL_LEFT_HIP:
-        return btVector3(RAD(h_leftUpperLegJoint), RAD(h_leftHipJointSideways),
-            RAD(h_leftHipJointTwist));
+        return btVector3(RAD(state.leftUpperLegJoint), RAD(state.leftHipJointSideways),
+            RAD(state.leftHipJointTwist));
     case BALL_RIGHT_HIP:
-        return btVector3(RAD(h_rightUpperLegJoint), RAD(h_rightHipJointSideways),
-            RAD(h_rightHipJointTwist));
+        return btVector3(RAD(state.rightUpperLegJoint), RAD(state.rightHipJointSideways),
+            RAD(state.rightHipJointTwist));
     }
     return btVector3(0, 0, 0);
 }
 
-static void driveBulletJoints(float dt) {
+static void driveBulletJoints(RobotPhysics& robot, const body& state, float dt) {
     bool motorsOn = h_muscleStrength > 0.001f && h_ragdollTimer <= 0.0f;
-    for (const HingeMotor& motor : g_hingeMotors) {
+    for (const HingeMotor& motor : robot.hingeMotors) {
         motor.joint->enableMotor(motorsOn);
         if (motorsOn) {
-            float target = clampf(motorTarget(motor.input), motor.low, motor.high);
+            float target = clampf(motorTarget(state, motor.input), motor.low, motor.high);
             motor.joint->setMaxMotorImpulse(30.0f * clampf(h_muscleStrength, 0.0f, 2.0f));
             motor.joint->setMotorTarget(RAD(target), dt);
         }
     }
 
-    for (const BallMotor& motor : g_ballMotors) {
+    for (const BallMotor& motor : robot.ballMotors) {
         for (int axis = 3; axis <= 5; axis++)
             motor.joint->enableMotor(axis, motorsOn);
         if (motorsOn) {
-            btVector3 target = ballMotorTarget(motor.input);
+            btVector3 target = ballMotorTarget(state, motor.input);
             for (int axis = 0; axis < 3; axis++)
                 target[axis] = clampf(float(target[axis]), float(motor.lower[axis]),
                     float(motor.upper[axis]));
@@ -469,23 +471,20 @@ static void driveBulletJoints(float dt) {
         }
     }
 
-    if (!g_waist) return;
-    g_waist->enableMotor(3, motorsOn);
-    g_waist->enableMotor(5, motorsOn);
+    if (!robot.waist) return;
+    robot.waist->enableMotor(3, motorsOn);
+    robot.waist->enableMotor(5, motorsOn);
     if (motorsOn) {
-        g_waist->setServoTarget(3, RAD(clampf(h_hipjoints, WAIST_MIN, WAIST_MAX)));
-        g_waist->setServoTarget(5, RAD(clampf(h_hipJointSideways, HIPROLL_MIN, HIPROLL_MAX)));
-        g_waist->setMaxMotorForce(3, 40.0f * h_muscleStrength);
-        g_waist->setMaxMotorForce(5, 40.0f * h_muscleStrength);
+        robot.waist->setServoTarget(3, RAD(clampf(state.hipjoints, WAIST_MIN, WAIST_MAX)));
+        robot.waist->setServoTarget(5, RAD(clampf(state.hipJointSideways, HIPROLL_MIN, HIPROLL_MAX)));
+        robot.waist->setMaxMotorForce(3, 40.0f * h_muscleStrength);
+        robot.waist->setMaxMotorForce(5, 40.0f * h_muscleStrength);
     }
 }
 
-static void applyRobotMovement(float frameDt) {
-    btRigidBody* pelvis = g_parts[PART_PELVIS].body;
+static void applyRobotMovement(RobotPhysics& robot, float frameDt) {
+    btRigidBody* pelvis = robot.parts[PART_PELVIS].body;
     if (!pelvis || frameDt <= 0.0f) return;
-
-    // The command is robot-local, so forward/sideways/up movement follows the
-    // robot instead of being locked to one world axis after it rotates or falls.
     btVector3 localAcceleration(
         clampf(h_robotMoveX, -25.0f, 25.0f),
         clampf(h_robotMoveY, -25.0f, 25.0f),
@@ -494,22 +493,18 @@ static void applyRobotMovement(float frameDt) {
     const btScalar maxAcceleration = 25.0f;
     if (worldAcceleration.length2() > maxAcceleration * maxAcceleration)
         worldAcceleration = worldAcceleration.normalized() * maxAcceleration;
-
-    // An impulse gives the same acceleration across all fixed Bullet
-    // substeps performed for this render frame.
     pelvis->applyCentralImpulse(worldAcceleration * pelvis->getMass() * frameDt);
 }
 
-static void updateBulletMaterial() {
-    if (!g_world) return;
+static void updateBulletMaterial(RobotPhysics& robot) {
     float frictionValue = clampf(h_friction, 0.0f, 1.0f);
     float restitutionValue = clampf(h_bounce, 0.0f, 1.0f);
     float damping = bulletLinearDamping();
-    if (g_groundBody) {
-        g_groundBody->setFriction(frictionValue);
-        g_groundBody->setRestitution(restitutionValue);
+    if (robot.groundBody) {
+        robot.groundBody->setFriction(frictionValue);
+        robot.groundBody->setRestitution(restitutionValue);
     }
-    for (BulletPart& part : g_parts) {
+    for (BulletPart& part : robot.parts) {
         if (!part.body) continue;
         part.body->setFriction(frictionValue);
         part.body->setRestitution(restitutionValue);
@@ -517,40 +512,16 @@ static void updateBulletMaterial() {
     }
 }
 
-static void updateBulletScale() {
+static void updateBulletScale(RobotPhysics& robot) {
     float scale = safeScale(h_robotScale);
-    if (std::fabs(scale - g_shapeScale) < 1e-5f) return;
-    for (BulletPart& part : g_parts)
+    if (std::fabs(scale - robot.shapeScale) < 1e-5f) return;
+    for (BulletPart& part : robot.parts)
         if (part.shape) part.shape->setLocalScaling(btVector3(scale, scale, scale));
-    g_shapeScale = scale;
+    robot.shapeScale = scale;
 }
 
-static void pullJointTargetsFromDevice() {
-    cudaMemcpyFromSymbol(&h_leftShoulderJoint, leftShoulderJoint, sizeof(float));
-    cudaMemcpyFromSymbol(&h_rightShoulderJoint, rightShoulderJoint, sizeof(float));
-    cudaMemcpyFromSymbol(&h_leftShoulderJointSideways, leftShoulderJointSideways, sizeof(float));
-    cudaMemcpyFromSymbol(&h_rightShoulderJointSideways, rightShoulderJointSideways, sizeof(float));
-    cudaMemcpyFromSymbol(&h_leftShoulderJointTwist, leftShoulderJointTwist, sizeof(float));
-    cudaMemcpyFromSymbol(&h_rightShoulderJointTwist, rightShoulderJointTwist, sizeof(float));
-    cudaMemcpyFromSymbol(&h_leftElbowJoint, leftElbowJoint, sizeof(float));
-    cudaMemcpyFromSymbol(&h_rightElbowJoint, rightElbowJoint, sizeof(float));
-    cudaMemcpyFromSymbol(&h_hipjoints, hipjoints, sizeof(float));
-    cudaMemcpyFromSymbol(&h_hipJointSideways, hipJointSideways, sizeof(float));
-    cudaMemcpyFromSymbol(&h_leftUpperLegJoint, leftUpperLegJoint, sizeof(float));
-    cudaMemcpyFromSymbol(&h_rightUpperLegJoint, rightUpperLegJoint, sizeof(float));
-    cudaMemcpyFromSymbol(&h_leftHipJointSideways, leftHipJointSideways, sizeof(float));
-    cudaMemcpyFromSymbol(&h_rightHipJointSideways, rightHipJointSideways, sizeof(float));
-    cudaMemcpyFromSymbol(&h_leftHipJointTwist, leftHipJointTwist, sizeof(float));
-    cudaMemcpyFromSymbol(&h_rightHipJointTwist, rightHipJointTwist, sizeof(float));
-    cudaMemcpyFromSymbol(&h_leftKneeJoint, leftKneeJoint, sizeof(float));
-    cudaMemcpyFromSymbol(&h_rightKneeJoint, rightKneeJoint, sizeof(float));
-    cudaMemcpyFromSymbol(&h_robotMoveX, robotMoveX, sizeof(float));
-    cudaMemcpyFromSymbol(&h_robotMoveY, robotMoveY, sizeof(float));
-    cudaMemcpyFromSymbol(&h_robotMoveZ, robotMoveZ, sizeof(float));
-}
-
-static btVector3 currentRobotRoot() {
-    const btTransform& transform = g_parts[PART_PELVIS].body->getWorldTransform();
+static btVector3 currentRobotRoot(const RobotPhysics& robot) {
+    const btTransform& transform = robot.parts[PART_PELVIS].body->getWorldTransform();
     float scale = safeScale(h_robotScale);
     btVector3 localCenter(0,
         (PART_SPECS[PART_PELVIS].y0 + PART_SPECS[PART_PELVIS].y1) * 0.5f * scale,
@@ -558,10 +529,10 @@ static btVector3 currentRobotRoot() {
     return transform * (-localCenter);
 }
 
-static void teleportRobotToHostRoot() {
-    if (!g_world || !g_parts[PART_PELVIS].body) return;
-    btVector3 delta(btVector3(h_robotX, h_robotY, h_robotZ) - currentRobotRoot());
-    for (BulletPart& part : g_parts) {
+static void teleportRobotToRoot(RobotPhysics& robot, const btVector3& target) {
+    if (!robot.world || !robot.parts[PART_PELVIS].body) return;
+    btVector3 delta(target - currentRobotRoot(robot));
+    for (BulletPart& part : robot.parts) {
         btTransform transform = part.body->getWorldTransform();
         transform.setOrigin(transform.getOrigin() + delta);
         part.body->setWorldTransform(transform);
@@ -571,117 +542,175 @@ static void teleportRobotToHostRoot() {
     }
 }
 
-static void writeBulletStateToDevice() {
-    if (!g_parts[PART_PELVIS].body) return;
-    btRigidBody* pelvis = g_parts[PART_PELVIS].body;
-    btVector3 root = currentRobotRoot();
-    btVector3 velocity = pelvis->getLinearVelocity();
-    btVector3 angularVelocity = pelvis->getAngularVelocity();
-    btScalar yaw, pitch, roll;
-    pelvis->getWorldTransform().getBasis().getEulerZYX(yaw, pitch, roll);
-    float degrees = 180.0f / PI;
-    float values[12] = {
-        float(root.x()), float(root.y()), float(root.z()),
-        float(velocity.x()), float(velocity.y()), float(velocity.z()),
-        float(pitch) * degrees, float(yaw) * degrees, float(roll) * degrees,
-        float(angularVelocity.x()), float(angularVelocity.y()), float(angularVelocity.z())
-    };
-    cudaMemcpyToSymbol(robotX, &values[0], sizeof(float));
-    cudaMemcpyToSymbol(robotY, &values[1], sizeof(float));
-    cudaMemcpyToSymbol(robotZ, &values[2], sizeof(float));
-    cudaMemcpyToSymbol(robotVelX, &values[3], sizeof(float));
-    cudaMemcpyToSymbol(robotVelY, &values[4], sizeof(float));
-    cudaMemcpyToSymbol(robotVelZ, &values[5], sizeof(float));
-    cudaMemcpyToSymbol(robotRotX, &values[6], sizeof(float));
-    cudaMemcpyToSymbol(robotRotY, &values[7], sizeof(float));
-    cudaMemcpyToSymbol(robotRotZ, &values[8], sizeof(float));
-    cudaMemcpyToSymbol(robotAngularVelX, &values[9], sizeof(float));
-    cudaMemcpyToSymbol(robotAngularVelY, &values[10], sizeof(float));
-    cudaMemcpyToSymbol(robotAngularVelZ, &values[11], sizeof(float));
+static void setContactFlags(body& state, const bool contacts[NUM_PARTS]) {
+    state.robotPelvisTouchingGround = contacts[PART_PELVIS];
+    state.robotTorsoTouchingGround = contacts[PART_TORSO];
+    state.robotHeadTouchingGround = contacts[PART_HEAD];
+    state.robotLeftUpperLegTouchingGround = contacts[PART_LUPPERLEG];
+    state.robotLeftLowerLegTouchingGround = contacts[PART_LLOWERLEG];
+    state.robotLeftFootTouchingGround = contacts[PART_LFOOT];
+    state.robotRightUpperLegTouchingGround = contacts[PART_RUPPERLEG];
+    state.robotRightLowerLegTouchingGround = contacts[PART_RLOWERLEG];
+    state.robotRightFootTouchingGround = contacts[PART_RFOOT];
+    state.robotLeftUpperArmTouchingGround = contacts[PART_LUPPERARM];
+    state.robotLeftForearmTouchingGround = contacts[PART_LFOREARM];
+    state.robotLeftHandTouchingGround = contacts[PART_LHAND];
+    state.robotRightUpperArmTouchingGround = contacts[PART_RUPPERARM];
+    state.robotRightForearmTouchingGround = contacts[PART_RFOREARM];
+    state.robotRightHandTouchingGround = contacts[PART_RHAND];
 }
 
-static void writeContactFlagsToDevice() {
-    bool contacts[ROBOT_PART_COUNT] = {};
-    bool any = false;
-    btDispatcher* dispatcher = g_world->getDispatcher();
-    int manifoldCount = dispatcher->getNumManifolds();
-    for (int i = 0; i < manifoldCount; i++) {
+static void writeRobotStateToBody(const RobotPhysics& robot, body& state) {
+    if (!robot.parts[PART_PELVIS].body) return;
+    btVector3 root = currentRobotRoot(robot);
+    state.positonX = float(root.x());
+    state.positionY = float(root.y());
+    state.positonZ = float(root.z());
+
+    bool contacts[NUM_PARTS] = {};
+    btDispatcher* dispatcher = robot.world->getDispatcher();
+    for (int i = 0; i < dispatcher->getNumManifolds(); i++) {
         btPersistentManifold* manifold = dispatcher->getManifoldByIndexInternal(i);
         const btCollisionObject* objectA = manifold->getBody0();
         const btCollisionObject* objectB = manifold->getBody1();
         int part = -1;
-        if (objectA->getUserIndex() >= 0 && objectA->getUserIndex() < NUM_PARTS && objectB == g_groundBody)
+        if (objectA->getUserIndex() >= 0 && objectA->getUserIndex() < NUM_PARTS &&
+            objectB == robot.groundBody)
             part = objectA->getUserIndex();
-        if (objectB->getUserIndex() >= 0 && objectB->getUserIndex() < NUM_PARTS && objectA == g_groundBody)
+        if (objectB->getUserIndex() >= 0 && objectB->getUserIndex() < NUM_PARTS &&
+            objectA == robot.groundBody)
             part = objectB->getUserIndex();
         if (part < 0) continue;
         for (int p = 0; p < manifold->getNumContacts(); p++) {
             if (manifold->getContactPoint(p).getDistance() <= 0.02f) {
                 contacts[part] = true;
-                any = true;
                 break;
             }
         }
     }
-    cudaMemcpyToSymbol(robotPartTouchingGround, contacts, sizeof(contacts));
-    cudaMemcpyToSymbol(robotAnyPartTouchingGround, &any, sizeof(bool));
-    cudaMemcpyToSymbol(robotPelvisTouchingGround, &contacts[PART_PELVIS], sizeof(bool));
-    cudaMemcpyToSymbol(robotTorsoTouchingGround, &contacts[PART_TORSO], sizeof(bool));
-    cudaMemcpyToSymbol(robotHeadTouchingGround, &contacts[PART_HEAD], sizeof(bool));
-    cudaMemcpyToSymbol(robotLeftUpperLegTouchingGround, &contacts[PART_LUPPERLEG], sizeof(bool));
-    cudaMemcpyToSymbol(robotLeftLowerLegTouchingGround, &contacts[PART_LLOWERLEG], sizeof(bool));
-    cudaMemcpyToSymbol(robotLeftFootTouchingGround, &contacts[PART_LFOOT], sizeof(bool));
-    cudaMemcpyToSymbol(robotRightUpperLegTouchingGround, &contacts[PART_RUPPERLEG], sizeof(bool));
-    cudaMemcpyToSymbol(robotRightLowerLegTouchingGround, &contacts[PART_RLOWERLEG], sizeof(bool));
-    cudaMemcpyToSymbol(robotRightFootTouchingGround, &contacts[PART_RFOOT], sizeof(bool));
-    cudaMemcpyToSymbol(robotLeftUpperArmTouchingGround, &contacts[PART_LUPPERARM], sizeof(bool));
-    cudaMemcpyToSymbol(robotLeftForearmTouchingGround, &contacts[PART_LFOREARM], sizeof(bool));
-    cudaMemcpyToSymbol(robotLeftHandTouchingGround, &contacts[PART_LHAND], sizeof(bool));
-    cudaMemcpyToSymbol(robotRightUpperArmTouchingGround, &contacts[PART_RUPPERARM], sizeof(bool));
-    cudaMemcpyToSymbol(robotRightForearmTouchingGround, &contacts[PART_RFOREARM], sizeof(bool));
-    cudaMemcpyToSymbol(robotRightHandTouchingGround, &contacts[PART_RHAND], sizeof(bool));
+    setContactFlags(state, contacts);
 }
 
-static void updateRenderTransforms() {
-    for (int part = 0; part < NUM_PARTS; part++) {
-        const btTransform& transform = g_parts[part].body->getWorldTransform();
-        const btMatrix3x3& basis = transform.getBasis();
-        h_robot_transforms[part].origin = make_float3(
-            float(transform.getOrigin().x()), float(transform.getOrigin().y()), float(transform.getOrigin().z()));
-        btVector3 x = basis.getColumn(0), y = basis.getColumn(1), z = basis.getColumn(2);
-        h_robot_transforms[part].axisX = make_float3(float(x.x()), float(x.y()), float(x.z()));
-        h_robot_transforms[part].axisY = make_float3(float(y.x()), float(y.y()), float(y.z()));
-        h_robot_transforms[part].axisZ = make_float3(float(z.x()), float(z.y()), float(z.z()));
+static int activeRobotCount() {
+    return std::max(1, robot_count);
+}
+
+static btVector3 initialRobotRoot(int index) {
+    const float scale = safeScale(h_robotScale);
+    const int columns = std::max(1, int(std::ceil(std::sqrt(float(g_robot_count)))));
+    const float spacing = 6.0f * scale;
+    return btVector3(h_robotX + float(index % columns) * spacing, h_robotY,
+        h_robotZ + float(index / columns) * spacing);
+}
+
+static void fillInitialBody(body& state, int index) {
+    btVector3 root = initialRobotRoot(index);
+    state = {};
+    state.positonX = float(root.x());
+    state.positionY = float(root.y());
+    state.positonZ = float(root.z());
+    state.leftShoulderJoint = h_leftShoulderJoint;
+    state.rightShoulderJoint = h_rightShoulderJoint;
+    state.leftShoulderJointSideways = h_leftShoulderJointSideways;
+    state.rightShoulderJointSideways = h_rightShoulderJointSideways;
+    state.leftShoulderJointTwist = h_leftShoulderJointTwist;
+    state.rightShoulderJointTwist = h_rightShoulderJointTwist;
+    state.leftElbowJoint = h_leftElbowJoint;
+    state.rightElbowJoint = h_rightElbowJoint;
+    state.hipjoints = h_hipjoints;
+    state.hipJointSideways = h_hipJointSideways;
+    state.leftUpperLegJoint = h_leftUpperLegJoint;
+    state.rightUpperLegJoint = h_rightUpperLegJoint;
+    state.leftHipJointSideways = h_leftHipJointSideways;
+    state.rightHipJointSideways = h_rightHipJointSideways;
+    state.leftHipJointTwist = h_leftHipJointTwist;
+    state.rightHipJointTwist = h_rightHipJointTwist;
+    state.leftKneeJoint = h_leftKneeJoint;
+    state.rightKneeJoint = h_rightKneeJoint;
+}
+
+static void mirrorFirstBodyToHost(const body& state) {
+    h_leftShoulderJoint = state.leftShoulderJoint;
+    h_rightShoulderJoint = state.rightShoulderJoint;
+    h_leftShoulderJointSideways = state.leftShoulderJointSideways;
+    h_rightShoulderJointSideways = state.rightShoulderJointSideways;
+    h_leftShoulderJointTwist = state.leftShoulderJointTwist;
+    h_rightShoulderJointTwist = state.rightShoulderJointTwist;
+    h_leftElbowJoint = state.leftElbowJoint;
+    h_rightElbowJoint = state.rightElbowJoint;
+    h_hipjoints = state.hipjoints;
+    h_hipJointSideways = state.hipJointSideways;
+    h_leftUpperLegJoint = state.leftUpperLegJoint;
+    h_rightUpperLegJoint = state.rightUpperLegJoint;
+    h_leftHipJointSideways = state.leftHipJointSideways;
+    h_rightHipJointSideways = state.rightHipJointSideways;
+    h_leftHipJointTwist = state.leftHipJointTwist;
+    h_rightHipJointTwist = state.rightHipJointTwist;
+    h_leftKneeJoint = state.leftKneeJoint;
+    h_rightKneeJoint = state.rightKneeJoint;
+}
+
+static bool syncBodiesFromDevice() {
+    if (!d_body) return true;
+    if (g_last_device_body != d_body || g_last_device_body_count != g_robot_count) {
+        cudaError_t error = cudaMemcpy(d_body, h_bodies.data(),
+            g_robot_count * sizeof(body), cudaMemcpyHostToDevice);
+        if (error != cudaSuccess) {
+            std::fprintf(stderr, "robot body initialization failed: %s\n",
+                cudaGetErrorString(error));
+            return false;
+        }
+        g_last_device_body = d_body;
+        g_last_device_body_count = g_robot_count;
+        g_device_body_initialized = true;
+        return true;
     }
-    cudaMemcpy(d_robot_transforms, h_robot_transforms, sizeof(h_robot_transforms), cudaMemcpyHostToDevice);
-}
 
-static bool mapRobotInteropBuffer(InteropRawTriangle3D*& output) {
-    output = nullptr;
-    if (!g_robotInteropReady || !g_robotInteropResource) return false;
-    cudaError_t error = cudaGraphicsMapResources(1, &g_robotInteropResource, 0);
+    cudaError_t error = cudaMemcpy(h_bodies.data(), d_body,
+        g_robot_count * sizeof(body), cudaMemcpyDeviceToHost);
     if (error != cudaSuccess) {
-        std::fprintf(stderr, "robot interop map failed: %s\n", cudaGetErrorString(error));
+        std::fprintf(stderr, "robot body download failed: %s\n", cudaGetErrorString(error));
         return false;
     }
-    size_t bytes = 0;
-    error = cudaGraphicsResourceGetMappedPointer(reinterpret_cast<void**>(&output), &bytes,
-        g_robotInteropResource);
-    if (error != cudaSuccess || !output || bytes < TOTAL_TRIS * sizeof(InteropRawTriangle3D)) {
-        std::fprintf(stderr, "robot interop pointer failed: %s\n",
-            cudaGetErrorString(error));
-        cudaGraphicsUnmapResources(1, &g_robotInteropResource, 0);
-        output = nullptr;
-        return false;
-    }
+    g_device_body_initialized = true;
+    if (!h_bodies.empty()) mirrorFirstBodyToHost(h_bodies[0]);
     return true;
 }
 
-static void unmapRobotInteropBuffer() {
-    if (!g_robotInteropReady || !g_robotInteropResource) return;
-    cudaError_t error = cudaGraphicsUnmapResources(1, &g_robotInteropResource, 0);
+static void syncBodiesToDevice() {
+    if (!d_body || !g_device_body_initialized) return;
+    cudaError_t error = cudaMemcpy(d_body, h_bodies.data(),
+        g_robot_count * sizeof(body), cudaMemcpyHostToDevice);
     if (error != cudaSuccess)
-        std::fprintf(stderr, "robot interop unmap failed: %s\n", cudaGetErrorString(error));
+        std::fprintf(stderr, "robot body upload failed: %s\n", cudaGetErrorString(error));
+}
+
+static void writeBodyFieldToDevice(size_t offset, const void* value, size_t size) {
+    if (!d_body || g_robot_count <= 0) return;
+    cudaError_t error = cudaMemcpy(reinterpret_cast<char*>(d_body) + offset,
+        value, size, cudaMemcpyHostToDevice);
+    if (error != cudaSuccess)
+        std::fprintf(stderr, "robot body field upload failed: %s\n", cudaGetErrorString(error));
+}
+
+static void updateRenderTransforms() {
+    if (h_robot_transforms.empty()) return;
+    for (int i = 0; i < g_robot_count; i++) {
+        const RobotPhysics& robot = g_robots[i];
+        for (int part = 0; part < NUM_PARTS; part++) {
+            const btTransform& transform = robot.parts[part].body->getWorldTransform();
+            const btMatrix3x3& basis = transform.getBasis();
+            RobotRenderTransform& output = h_robot_transforms[i * NUM_PARTS + part];
+            output.origin = make_float3(float(transform.getOrigin().x()),
+                float(transform.getOrigin().y()), float(transform.getOrigin().z()));
+            btVector3 x = basis.getColumn(0), y = basis.getColumn(1), z = basis.getColumn(2);
+            output.axisX = make_float3(float(x.x()), float(x.y()), float(x.z()));
+            output.axisY = make_float3(float(y.x()), float(y.y()), float(y.z()));
+            output.axisZ = make_float3(float(z.x()), float(z.y()), float(z.z()));
+        }
+    }
+    cudaMemcpy(d_robot_transforms, h_robot_transforms.data(),
+        h_robot_transforms.size() * sizeof(RobotRenderTransform), cudaMemcpyHostToDevice);
 }
 
 static void addShadedBox(std::vector<rawTriangles3D>& tris,
@@ -745,8 +774,13 @@ static void createRobotGeometry(std::vector<rawTriangles3D>& tris) {
     addCenteredPart(tris, PART_RHAND, 0.02f, 0.02f, 0.16f, 0.17f, 0.24f);
 }
 
-__device__ inline float3 add3(float3 a, float3 b) { return make_float3(a.x+b.x, a.y+b.y, a.z+b.z); }
-__device__ inline float3 scale3(float3 a, float s) { return make_float3(a.x*s, a.y*s, a.z*s); }
+__device__ inline float3 add3(float3 a, float3 b) {
+    return make_float3(a.x + b.x, a.y + b.y, a.z + b.z);
+}
+
+__device__ inline float3 scale3(float3 a, float s) {
+    return make_float3(a.x * s, a.y * s, a.z * s);
+}
 
 __device__ float3 transformVertex(const RobotRenderTransform& transform, vertex3d v, float scale) {
     return add3(transform.origin, add3(scale3(transform.axisX, v.x * scale),
@@ -754,15 +788,19 @@ __device__ float3 transformVertex(const RobotRenderTransform& transform, vertex3
 }
 
 __global__ void renderRobotKernel(const rawTriangles3D* geometry,
-    const RobotRenderTransform* transforms, InteropRawTriangle3D* output) {
+    const RobotRenderTransform* transforms, InteropRawTriangle3D* output, int robotCount) {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
-    if (id >= TOTAL_TRIS) return;
-    int part = id / TRIS_PER_PART;
-    rawTriangles3D tri = geometry[id];
+    int total = robotCount * TOTAL_TRIS;
+    if (id >= total) return;
+    int robotIndex = id / TOTAL_TRIS;
+    int localId = id % TOTAL_TRIS;
+    int part = localId / TRIS_PER_PART;
+    rawTriangles3D tri = geometry[localId];
     float scale = robotScale > 0.001f ? robotScale : 1.0f;
-    float3 a = transformVertex(transforms[part], tri.vertex1, scale);
-    float3 b = transformVertex(transforms[part], tri.vertex2, scale);
-    float3 c = transformVertex(transforms[part], tri.vertex3, scale);
+    const RobotRenderTransform& transform = transforms[robotIndex * NUM_PARTS + part];
+    float3 a = transformVertex(transform, tri.vertex1, scale);
+    float3 b = transformVertex(transform, tri.vertex2, scale);
+    float3 c = transformVertex(transform, tri.vertex3, scale);
     InteropRawTriangle3D rendered = {};
     rendered.data[0] = a.x; rendered.data[1] = a.y; rendered.data[2] = a.z;
     rendered.data[3] = tri.r; rendered.data[4] = tri.g; rendered.data[5] = tri.b;
@@ -773,16 +811,54 @@ __global__ void renderRobotKernel(const rawTriangles3D* geometry,
     output[id] = rendered;
 }
 
+static bool mapRobotInteropBuffer(InteropRawTriangle3D*& output) {
+    output = nullptr;
+    if (!g_robotInteropReady || !g_robotInteropResource) return false;
+    cudaError_t error = cudaGraphicsMapResources(1, &g_robotInteropResource, 0);
+    if (error != cudaSuccess) {
+        std::fprintf(stderr, "robot interop map failed: %s\n", cudaGetErrorString(error));
+        return false;
+    }
+    size_t bytes = 0;
+    error = cudaGraphicsResourceGetMappedPointer(reinterpret_cast<void**>(&output), &bytes,
+        g_robotInteropResource);
+    if (error != cudaSuccess || !output || bytes < size_t(g_render_triangle_count) * sizeof(InteropRawTriangle3D)) {
+        std::fprintf(stderr, "robot interop pointer failed: %s\n", cudaGetErrorString(error));
+        cudaGraphicsUnmapResources(1, &g_robotInteropResource, 0);
+        output = nullptr;
+        return false;
+    }
+    return true;
+}
+
+static void unmapRobotInteropBuffer() {
+    if (!g_robotInteropReady || !g_robotInteropResource) return;
+    cudaError_t error = cudaGraphicsUnmapResources(1, &g_robotInteropResource, 0);
+    if (error != cudaSuccess)
+        std::fprintf(stderr, "robot interop unmap failed: %s\n", cudaGetErrorString(error));
+}
+
 void initrobot() {
+    g_robot_count = activeRobotCount();
+    g_robots.resize(g_robot_count);
+    h_bodies.resize(g_robot_count);
+    h_robot_transforms.resize(g_robot_count * NUM_PARTS);
+
+    for (int i = 0; i < g_robot_count; i++) {
+        fillInitialBody(h_bodies[i], i);
+        createRobotPhysics(g_robots[i], initialRobotRoot(i));
+    }
+
     std::vector<rawTriangles3D> geometry;
     createRobotGeometry(geometry);
     cudaMalloc(&d_robot_geom, TOTAL_TRIS * sizeof(rawTriangles3D));
-    cudaMalloc(&d_robot_transforms, sizeof(h_robot_transforms));
-    cudaMemcpy(d_robot_geom, geometry.data(), TOTAL_TRIS * sizeof(rawTriangles3D), cudaMemcpyHostToDevice);
+    cudaMalloc(&d_robot_transforms,
+        h_robot_transforms.size() * sizeof(RobotRenderTransform));
+    cudaMemcpy(d_robot_geom, geometry.data(), TOTAL_TRIS * sizeof(rawTriangles3D),
+        cudaMemcpyHostToDevice);
 
-    // noRender owns the OpenGL VBO; create it first, then register that same
-    // storage with CUDA so the render kernel can write directly into it.
-    render.rawTriangleBatchInterop3D(TOTAL_TRIS, ROBOT_INTEROP_ID);
+    g_render_triangle_count = g_robot_count * TOTAL_TRIS;
+    render.rawTriangleBatchInterop3D(g_render_triangle_count, ROBOT_INTEROP_ID);
     cudaError_t interopError = cudaGraphicsGLRegisterBuffer(
         &g_robotInteropResource, rawTri3dBatchVBO[ROBOT_INTEROP_ID],
         cudaGraphicsRegisterFlagsWriteDiscard);
@@ -793,40 +869,24 @@ void initrobot() {
         g_robotInteropReady = true;
     }
 
-    cudaMemcpyToSymbol(robotX, &h_robotX, sizeof(float));
-    cudaMemcpyToSymbol(robotY, &h_robotY, sizeof(float));
-    cudaMemcpyToSymbol(robotZ, &h_robotZ, sizeof(float));
-    cudaMemcpyToSymbol(leftShoulderJointSideways, &h_leftShoulderJointSideways, sizeof(float));
-    cudaMemcpyToSymbol(rightShoulderJointSideways, &h_rightShoulderJointSideways, sizeof(float));
-    cudaMemcpyToSymbol(leftShoulderJointTwist, &h_leftShoulderJointTwist, sizeof(float));
-    cudaMemcpyToSymbol(rightShoulderJointTwist, &h_rightShoulderJointTwist, sizeof(float));
-    cudaMemcpyToSymbol(leftHipJointSideways, &h_leftHipJointSideways, sizeof(float));
-    cudaMemcpyToSymbol(rightHipJointSideways, &h_rightHipJointSideways, sizeof(float));
-    cudaMemcpyToSymbol(leftHipJointTwist, &h_leftHipJointTwist, sizeof(float));
-    cudaMemcpyToSymbol(rightHipJointTwist, &h_rightHipJointTwist, sizeof(float));
-    cudaMemcpyToSymbol(robotMoveX, &h_robotMoveX, sizeof(float));
-    cudaMemcpyToSymbol(robotMoveY, &h_robotMoveY, sizeof(float));
-    cudaMemcpyToSymbol(robotMoveZ, &h_robotMoveZ, sizeof(float));
     cudaMemcpyToSymbol(robotScale, &h_robotScale, sizeof(float));
     cudaMemcpyToSymbol(gravity, &h_gravity, sizeof(float));
     cudaMemcpyToSymbol(friction, &h_friction, sizeof(float));
     cudaMemcpyToSymbol(drag, &h_drag, sizeof(float));
     cudaMemcpyToSymbol(bounce, &h_bounce, sizeof(float));
     cudaMemcpyToSymbol(d_floorY, &floorY, sizeof(float));
-    createBulletWorld();
-    g_shapeScale = safeScale(h_robotScale);
     updateRenderTransforms();
-    writeBulletStateToDevice();
-    writeContactFlagsToDevice();
+    for (int i = 0; i < g_robot_count; i++) writeRobotStateToBody(g_robots[i], h_bodies[i]);
+    syncBodiesFromDevice();
+    syncBodiesToDevice();
     g_lastPhysicsUpdate = std::chrono::steady_clock::now();
     g_havePhysicsUpdateTime = true;
 }
 
 void updaterobot() {
-    if (!g_world) return;
-    pullJointTargetsFromDevice();
-    updateBulletMaterial();
-    updateBulletScale();
+    if (g_robots.empty()) return;
+    if (!syncBodiesFromDevice()) return;
+
     const auto now = std::chrono::steady_clock::now();
     float frameDt = g_havePhysicsUpdateTime
         ? std::chrono::duration<float>(now - g_lastPhysicsUpdate).count()
@@ -840,84 +900,179 @@ void updaterobot() {
     fixedDt = clampf(fixedDt, 0.0005f, 0.05f);
     if (h_ragdollTimer > 0.0f)
         h_ragdollTimer = std::max(0.0f, h_ragdollTimer - frameDt);
-    driveBulletJoints(fixedDt);
-    applyRobotMovement(frameDt);
-    // Advance by wall-clock time while retaining a stable fixed substep.
-    // This prevents a 60 Hz render loop from making a 120 Hz robot fall at
-    // half speed.
-    g_world->stepSimulation(frameDt, 8, fixedDt);
-    writeBulletStateToDevice();
-    writeContactFlagsToDevice();
+
+    for (int i = 0; i < g_robot_count; i++) {
+        RobotPhysics& robot = g_robots[i];
+        updateBulletMaterial(robot);
+        updateBulletScale(robot);
+        driveBulletJoints(robot, h_bodies[i], fixedDt);
+        applyRobotMovement(robot, frameDt);
+        robot.world->stepSimulation(frameDt, 8, fixedDt);
+        writeRobotStateToBody(robot, h_bodies[i]);
+    }
+
+    syncBodiesToDevice();
     updateRenderTransforms();
     InteropRawTriangle3D* d_interopOutput = nullptr;
     if (mapRobotInteropBuffer(d_interopOutput)) {
-        int blocks = (TOTAL_TRIS + 255) / 256;
-        renderRobotKernel<<<blocks, 256>>>(d_robot_geom, d_robot_transforms, d_interopOutput);
+        int blocks = (g_render_triangle_count + 255) / 256;
+        renderRobotKernel<<<blocks, 256>>>(d_robot_geom, d_robot_transforms,
+            d_interopOutput, g_robot_count);
         cudaDeviceSynchronize();
         unmapRobotInteropBuffer();
     }
 }
 
-void renderRobot() { render.rawTriangleBatchInterop3D(TOTAL_TRIS, ROBOT_INTEROP_ID); }
+void renderRobot() {
+    render.rawTriangleBatchInterop3D(g_render_triangle_count, ROBOT_INTEROP_ID);
+}
 
 void readRobotRoot(float& x, float& y, float& z) {
-    cudaMemcpyFromSymbol(&x, robotX, sizeof(float));
-    cudaMemcpyFromSymbol(&y, robotY, sizeof(float));
-    cudaMemcpyFromSymbol(&z, robotZ, sizeof(float));
+    if (g_robot_count <= 0) return;
+    syncBodiesFromDevice();
+    x = h_bodies[0].positonX;
+    y = h_bodies[0].positionY;
+    z = h_bodies[0].positonZ;
 }
 
 void readRobotContacts(bool* outContacts, int count) {
-    if (!outContacts || count <= 0) return;
-    int n = std::min(count, ROBOT_PART_COUNT);
-    cudaMemcpyFromSymbol(outContacts, robotPartTouchingGround, n * sizeof(bool), 0, cudaMemcpyDeviceToHost);
+    if (!outContacts || count <= 0 || g_robot_count <= 0) return;
+    syncBodiesFromDevice();
+    const body& state = h_bodies[0];
+    bool contacts[NUM_PARTS] = {
+        state.robotPelvisTouchingGround, state.robotTorsoTouchingGround,
+        state.robotHeadTouchingGround, state.robotLeftUpperLegTouchingGround,
+        state.robotLeftLowerLegTouchingGround, state.robotLeftFootTouchingGround,
+        state.robotRightUpperLegTouchingGround, state.robotRightLowerLegTouchingGround,
+        state.robotRightFootTouchingGround, state.robotLeftUpperArmTouchingGround,
+        state.robotLeftForearmTouchingGround, state.robotLeftHandTouchingGround,
+        state.robotRightUpperArmTouchingGround, state.robotRightForearmTouchingGround,
+        state.robotRightHandTouchingGround
+    };
+    int n = std::min(count, NUM_PARTS);
+    std::copy(contacts, contacts + n, outContacts);
+}
+
+static void updateFloorForAllRobots() {
+    for (RobotPhysics& robot : g_robots) {
+        if (!robot.groundBody) continue;
+        btTransform transform = robot.groundBody->getWorldTransform();
+        transform.setOrigin(btVector3(floorX, floorY - 0.5f, floorZ));
+        robot.groundBody->setWorldTransform(transform);
+    }
 }
 
 void syncvar(int id) {
+    if (g_robot_count <= 0) return;
     switch (id) {
     case 0:
         cudaMemcpyToSymbol(d_floorY, &floorY, sizeof(float));
-        if (g_groundBody) {
-            btTransform transform = g_groundBody->getWorldTransform();
-            transform.setOrigin(btVector3(floorX, floorY - 0.5f, floorZ));
-            g_groundBody->setWorldTransform(transform);
-        }
+        updateFloorForAllRobots();
         break;
     case 1:
         cudaMemcpyToSymbol(gravity, &h_gravity, sizeof(float));
-        if (g_world) g_world->setGravity(btVector3(0, h_gravity, 0));
+        for (RobotPhysics& robot : g_robots)
+            if (robot.world) robot.world->setGravity(btVector3(0, h_gravity, 0));
         break;
     case 2: cudaMemcpyToSymbol(friction, &h_friction, sizeof(float)); break;
     case 3: cudaMemcpyToSymbol(drag, &h_drag, sizeof(float)); break;
     case 4: cudaMemcpyToSymbol(bounce, &h_bounce, sizeof(float)); break;
     case 5:
         cudaMemcpyToSymbol(robotScale, &h_robotScale, sizeof(float));
-        updateBulletScale();
+        for (RobotPhysics& robot : g_robots) updateBulletScale(robot);
         break;
-    case 6: cudaMemcpyToSymbol(robotX, &h_robotX, sizeof(float)); teleportRobotToHostRoot(); break;
-    case 7: cudaMemcpyToSymbol(robotY, &h_robotY, sizeof(float)); teleportRobotToHostRoot(); break;
-    case 8: cudaMemcpyToSymbol(robotZ, &h_robotZ, sizeof(float)); teleportRobotToHostRoot(); break;
-    case 9: cudaMemcpyToSymbol(leftShoulderJoint, &h_leftShoulderJoint, sizeof(float)); break;
-    case 10: cudaMemcpyToSymbol(rightShoulderJoint, &h_rightShoulderJoint, sizeof(float)); break;
-    case 11: cudaMemcpyToSymbol(leftElbowJoint, &h_leftElbowJoint, sizeof(float)); break;
-    case 12: cudaMemcpyToSymbol(rightElbowJoint, &h_rightElbowJoint, sizeof(float)); break;
-    case 13: cudaMemcpyToSymbol(hipjoints, &h_hipjoints, sizeof(float)); break;
-    case 14: cudaMemcpyToSymbol(hipJointSideways, &h_hipJointSideways, sizeof(float)); break;
-    case 15: cudaMemcpyToSymbol(leftUpperLegJoint, &h_leftUpperLegJoint, sizeof(float)); break;
-    case 16: cudaMemcpyToSymbol(rightUpperLegJoint, &h_rightUpperLegJoint, sizeof(float)); break;
-    case 17: cudaMemcpyToSymbol(leftKneeJoint, &h_leftKneeJoint, sizeof(float)); break;
-    case 18: cudaMemcpyToSymbol(rightKneeJoint, &h_rightKneeJoint, sizeof(float)); break;
+    case 6:
+        h_bodies[0].positonX = h_robotX;
+        writeBodyFieldToDevice(offsetof(body, positonX), &h_bodies[0].positonX, sizeof(float));
+        teleportRobotToRoot(g_robots[0], btVector3(h_robotX, h_bodies[0].positionY, h_bodies[0].positonZ));
+        break;
+    case 7:
+        h_bodies[0].positionY = h_robotY;
+        writeBodyFieldToDevice(offsetof(body, positionY), &h_bodies[0].positionY, sizeof(float));
+        teleportRobotToRoot(g_robots[0], btVector3(h_bodies[0].positonX, h_robotY, h_bodies[0].positonZ));
+        break;
+    case 8:
+        h_bodies[0].positonZ = h_robotZ;
+        writeBodyFieldToDevice(offsetof(body, positonZ), &h_bodies[0].positonZ, sizeof(float));
+        teleportRobotToRoot(g_robots[0], btVector3(h_bodies[0].positonX, h_bodies[0].positionY, h_robotZ));
+        break;
+    case 9:
+        h_bodies[0].leftShoulderJoint = h_leftShoulderJoint;
+        writeBodyFieldToDevice(offsetof(body, leftShoulderJoint), &h_bodies[0].leftShoulderJoint, sizeof(float));
+        break;
+    case 10:
+        h_bodies[0].rightShoulderJoint = h_rightShoulderJoint;
+        writeBodyFieldToDevice(offsetof(body, rightShoulderJoint), &h_bodies[0].rightShoulderJoint, sizeof(float));
+        break;
+    case 11:
+        h_bodies[0].leftElbowJoint = h_leftElbowJoint;
+        writeBodyFieldToDevice(offsetof(body, leftElbowJoint), &h_bodies[0].leftElbowJoint, sizeof(float));
+        break;
+    case 12:
+        h_bodies[0].rightElbowJoint = h_rightElbowJoint;
+        writeBodyFieldToDevice(offsetof(body, rightElbowJoint), &h_bodies[0].rightElbowJoint, sizeof(float));
+        break;
+    case 13:
+        h_bodies[0].hipjoints = h_hipjoints;
+        writeBodyFieldToDevice(offsetof(body, hipjoints), &h_bodies[0].hipjoints, sizeof(float));
+        break;
+    case 14:
+        h_bodies[0].hipJointSideways = h_hipJointSideways;
+        writeBodyFieldToDevice(offsetof(body, hipJointSideways), &h_bodies[0].hipJointSideways, sizeof(float));
+        break;
+    case 15:
+        h_bodies[0].leftUpperLegJoint = h_leftUpperLegJoint;
+        writeBodyFieldToDevice(offsetof(body, leftUpperLegJoint), &h_bodies[0].leftUpperLegJoint, sizeof(float));
+        break;
+    case 16:
+        h_bodies[0].rightUpperLegJoint = h_rightUpperLegJoint;
+        writeBodyFieldToDevice(offsetof(body, rightUpperLegJoint), &h_bodies[0].rightUpperLegJoint, sizeof(float));
+        break;
+    case 17:
+        h_bodies[0].leftKneeJoint = h_leftKneeJoint;
+        writeBodyFieldToDevice(offsetof(body, leftKneeJoint), &h_bodies[0].leftKneeJoint, sizeof(float));
+        break;
+    case 18:
+        h_bodies[0].rightKneeJoint = h_rightKneeJoint;
+        writeBodyFieldToDevice(offsetof(body, rightKneeJoint), &h_bodies[0].rightKneeJoint, sizeof(float));
+        break;
     case 19: cudaMemcpyToSymbol(g_ragdollTimer, &h_ragdollTimer, sizeof(float)); break;
     case 20: cudaMemcpyToSymbol(g_muscleScale, &h_muscleStrength, sizeof(float)); break;
-    case 21: cudaMemcpyToSymbol(leftShoulderJointSideways, &h_leftShoulderJointSideways, sizeof(float)); break;
-    case 22: cudaMemcpyToSymbol(rightShoulderJointSideways, &h_rightShoulderJointSideways, sizeof(float)); break;
-    case 23: cudaMemcpyToSymbol(leftShoulderJointTwist, &h_leftShoulderJointTwist, sizeof(float)); break;
-    case 24: cudaMemcpyToSymbol(rightShoulderJointTwist, &h_rightShoulderJointTwist, sizeof(float)); break;
-    case 25: cudaMemcpyToSymbol(leftHipJointSideways, &h_leftHipJointSideways, sizeof(float)); break;
-    case 26: cudaMemcpyToSymbol(rightHipJointSideways, &h_rightHipJointSideways, sizeof(float)); break;
-    case 27: cudaMemcpyToSymbol(leftHipJointTwist, &h_leftHipJointTwist, sizeof(float)); break;
-    case 28: cudaMemcpyToSymbol(rightHipJointTwist, &h_rightHipJointTwist, sizeof(float)); break;
-    case 29: cudaMemcpyToSymbol(robotMoveX, &h_robotMoveX, sizeof(float)); break;
-    case 30: cudaMemcpyToSymbol(robotMoveY, &h_robotMoveY, sizeof(float)); break;
-    case 31: cudaMemcpyToSymbol(robotMoveZ, &h_robotMoveZ, sizeof(float)); break;
+    case 21:
+        h_bodies[0].leftShoulderJointSideways = h_leftShoulderJointSideways;
+        writeBodyFieldToDevice(offsetof(body, leftShoulderJointSideways), &h_bodies[0].leftShoulderJointSideways, sizeof(float));
+        break;
+    case 22:
+        h_bodies[0].rightShoulderJointSideways = h_rightShoulderJointSideways;
+        writeBodyFieldToDevice(offsetof(body, rightShoulderJointSideways), &h_bodies[0].rightShoulderJointSideways, sizeof(float));
+        break;
+    case 23:
+        h_bodies[0].leftShoulderJointTwist = h_leftShoulderJointTwist;
+        writeBodyFieldToDevice(offsetof(body, leftShoulderJointTwist), &h_bodies[0].leftShoulderJointTwist, sizeof(float));
+        break;
+    case 24:
+        h_bodies[0].rightShoulderJointTwist = h_rightShoulderJointTwist;
+        writeBodyFieldToDevice(offsetof(body, rightShoulderJointTwist), &h_bodies[0].rightShoulderJointTwist, sizeof(float));
+        break;
+    case 25:
+        h_bodies[0].leftHipJointSideways = h_leftHipJointSideways;
+        writeBodyFieldToDevice(offsetof(body, leftHipJointSideways), &h_bodies[0].leftHipJointSideways, sizeof(float));
+        break;
+    case 26:
+        h_bodies[0].rightHipJointSideways = h_rightHipJointSideways;
+        writeBodyFieldToDevice(offsetof(body, rightHipJointSideways), &h_bodies[0].rightHipJointSideways, sizeof(float));
+        break;
+    case 27:
+        h_bodies[0].leftHipJointTwist = h_leftHipJointTwist;
+        writeBodyFieldToDevice(offsetof(body, leftHipJointTwist), &h_bodies[0].leftHipJointTwist, sizeof(float));
+        break;
+    case 28:
+        h_bodies[0].rightHipJointTwist = h_rightHipJointTwist;
+        writeBodyFieldToDevice(offsetof(body, rightHipJointTwist), &h_bodies[0].rightHipJointTwist, sizeof(float));
+        break;
+    case 29:
+    case 30:
+    case 31:
+        break;
     }
 }
