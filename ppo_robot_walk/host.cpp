@@ -7,6 +7,7 @@
 #include "vars.h"
 #include"render.h"
 #include "ui.h"
+#include "network.h"
 int main()
 {
 	
@@ -24,21 +25,56 @@ int main()
 	noRender.movementSpeed = 20.0f;
 	initfloor();
 	initrobot();
+	initnetwork();
+	double lastTime = glfwGetTime();
+	double fpsClock = lastTime;
+	spriteData target = noRender.loadSprite("D:\\visual_studio\\ppo_robot_walk\\ppo_robot_walk\\circle.png");
 	while(noRender.isWindowOpen())
 	{
+		double now = glfwGetTime();
+		double frameTime = now - lastTime;
+		lastTime = now;
 		noRender.updateCamera();
 		noRender.setInputBlocked(io.WantCaptureMouse || io.WantCaptureKeyboard);
 		noRender.pollEvents();
 		noRender.clearScreen(0.1f, 0.1f, 0.1f);
-		updaterobot();
+		if (run_ai) {
+			run_network();
+		}
+		else {
+			updaterobot();
+		}
+		timer += dt;
 		renderfloor();
+		render.sprite3D(target, targetx, 0.5f, targetz, targetradious, trx, Try);
 		renderRobot();
 		renderUI();
+
+		if (timer >= gentime) {
+			timer = 0.0f;
+			gen++;
+			resetrobots();
+		}
 		noRender.swapBuffers();
+
+		double elapsed = now - fpsClock;
+		fpsClock = now;
+		fps = (elapsed > 0.0) ? 1.0 / elapsed : fps;
+		fpsTimer += (float)elapsed;
+		fpsCount++;
+
+		if (fpsTimer >= 0.5f) {
+			avgFps = fpsCount / fpsTimer;
+			fpsTimer = 0.f;
+			fpsCount = 0;
+		}
 	}
+	save_weights();
 	noRender.closeWindow();
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
+	cudafree();
+	
 	return 0;
 }

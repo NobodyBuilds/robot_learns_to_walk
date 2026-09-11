@@ -4,7 +4,7 @@
 #include "render.h"
 #include "norender.h"
 
-int threads = 256;
+inline int threads = 256;
 
 //floor variables
 inline std::vector<quadtexture2d> floorquads;
@@ -22,10 +22,19 @@ inline float floorRotationY = 0.0f;
 //robot variables
 // Number of independent robot instances in the environment.
 inline int robot_count = 1;
+inline int sample_robot_count = 1;
 struct body {
 	float positonX = 0.0f;
 	float positionY = 0.0f;
 	float positonZ = 0.0f;
+
+	float velX = 0.0f;
+	float velY = 0.0f;
+	float velZ = 0.0f;
+
+	float angleVelX = 0.0f;
+	float angleVelY = 0.0f;
+	float angleVelZ = 0.0f;
 
     float leftShoulderJoint = 0.0f;
     float leftShoulderJointSideways = 0.0f;
@@ -65,6 +74,9 @@ struct body {
 	bool robotRightUpperArmTouchingGround = false;
 	bool robotRightForearmTouchingGround = false;
 	bool robotRightHandTouchingGround = false;
+
+	bool alive = true;
+	bool reached = false;
 
 };
 
@@ -142,7 +154,7 @@ inline __device__ float d_floorY = 0.0f;
 
 // Host variables for UI
 inline float h_robotX = 0.0f;
-inline float h_robotY = 3.0f;
+inline float h_robotY = 12.0f;
 inline float h_robotZ = 0.0f;
 
 inline float h_robotMoveX = 0.0f;
@@ -157,7 +169,7 @@ inline float h_leftShoulderJointTwist = 0.0f;
 inline float h_rightShoulderJointTwist = 0.0f;
 inline float h_leftElbowJoint = 0.0f;
 inline float h_rightElbowJoint = 0.0f;
-inline float h_hipjoints = 0.0f;
+inline float h_hipjoints = -20.0f;
 inline float h_hipJointSideways = 0.0f;
 inline float h_leftUpperLegJoint = 0.0f;
 inline float h_rightUpperLegJoint = 0.0f;
@@ -168,34 +180,45 @@ inline float h_rightHipJointTwist = 0.0f;
 inline float h_leftKneeJoint = 0.0f;
 inline float h_rightKneeJoint = 0.0f;
 
-inline float h_gravity = -9.8f;
+inline float h_gravity = -49.8f;
 inline float h_friction = 0.9f;
 inline float h_drag = 0.98f;
 inline float h_bounce = 0.0f;
-inline float h_robotScale = 1.0f;
+inline float h_robotScale = 3.0f;
 
 /////
 //env
 
-float targetx = 500.0f;
-float targetz = 250.0f;
-float spawnx = 0.0f;
-float spawnz = 0.0f;
-float maxdisttotarget = 0.0f;
-float mloss = 0.0f;
-float oldmloss = 0.0f;
-float rollout_time = 0.0f;
-
-int inputs = 34;
-int output = 18;
-int actor_layers;
-int critic_layers;
-int rollout_epoch = 2;
-int adam_step = 0;
-bool training = true;
+inline float targetx = 246;
+inline float targetz = 250.0f;
+inline float targetradious = 46.0f;
+inline float trx = 90.0f;
+inline float Try = 0.0f;
+inline float spawnx = 0.0f;
+inline float spawnz = 0.0f;
+inline float maxdisttotarget = 0.0f;
+inline float mloss = 0.0f;
+inline float oldmloss = 0.0f;
+inline float rollout_time = 0.0f;
+inline float lr = 0.001f;
+inline float gentime = 20.0f;
+inline float timer = 0.0f;
+inline float fpsTimer = 0.0f;
+inline float fpsCount = 0;
+inline float fps = 0;
+inline float avgFps = 0;
+inline float dt = 1.0f / 120.0f;
+inline int inputs = 40;
+inline int output = 18;
+inline int actor_layers;
+inline int critic_layers;
+inline int rollout_epoch = 2;
+inline int adam_step = 1;
+inline bool training = false;
+inline bool run_ai = false;
 
 struct replaybuffer {
-	float s1[34];
+	float s1[40];
 
 	float reward;
 	float logprob;
@@ -223,11 +246,11 @@ struct Layer {
 
 
 //ppo
-int replaybuffersize = robot_count * 2048;
-int gen = 0;
-int step = 0;
-int rolloutstep = 0;
-int hbatchsize = 128;
+inline int replaybuffersize = robot_count * 2048;
+inline int gen = 0;
+inline int step = 0;
+inline int rolloutstep = 0;
+inline int hbatchsize = 128;
 inline float* d_actor_weights = nullptr;
 inline float* d_critic_weights = nullptr;
 inline float* d_actor_bias = nullptr;
@@ -244,9 +267,24 @@ inline float* d_actor_delta = nullptr;
 inline float* d_critic_delta = nullptr;
 inline int* d_indices = nullptr;
 inline float* d_antity_nodevals = nullptr;
-inline float* actor_adam_weights = nullptr;
-inline float* critic_adam_weights = nullptr;
-inline float* actor_adam_bias = nullptr;
-inline float* critic_adam_bias = nullptr;
+inline float2* actor_adam_weights = nullptr;//x== m,y==v
+inline float2* actor_adam_bias = nullptr;//x== m,y==v
+inline float2* critic_adam_weights = nullptr;
+inline float2* critic_adam_bias = nullptr;
+
 
 inline std::vector<int> shuffled_indices;
+
+
+inline int blocks(int n) {
+	return (n + threads - 1) / threads;
+};
+//rewards  
+inline float alive = 1.0f;
+inline float dead = -10.0f;
+inline float win = 25.0f;
+inline float reachtarget = 1.0f;
+inline float feettouching = 1.0f;
+inline float handtouching = -1.0f;
+inline float headtouching = -0.0f;
+inline float torsotouching = -0.0f;

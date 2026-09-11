@@ -18,6 +18,7 @@
 #include "renderdata.h"
 #include "render.h"
 #include "vars.h"
+#include "network.h"
 
 #define PI 3.14159265358979323846f
 #define RAD(x) ((x) * PI / 180.0f)
@@ -157,6 +158,7 @@ struct RobotPhysics {
 
 static std::vector<RobotPhysics> g_robots;
 static std::vector<body> h_bodies;
+static std::vector<unsigned char> g_pending_resets;
 static int g_robot_count = 0;
 static body* g_last_device_body = nullptr;
 static int g_last_device_body_count = 0;
@@ -567,6 +569,16 @@ static void writeRobotStateToBody(const RobotPhysics& robot, body& state) {
     state.positionY = float(root.y());
     state.positonZ = float(root.z());
 
+    const btRigidBody* pelvis = robot.parts[PART_PELVIS].body;
+    btVector3 linearVelocity = pelvis->getLinearVelocity();
+    btVector3 angularVelocity = pelvis->getAngularVelocity();
+    state.velX = float(linearVelocity.x());
+    state.velY = float(linearVelocity.y());
+    state.velZ = float(linearVelocity.z());
+    state.angleVelX = float(angularVelocity.x());
+    state.angleVelY = float(angularVelocity.y());
+    state.angleVelZ = float(angularVelocity.z());
+
     bool contacts[NUM_PARTS] = {};
     btDispatcher* dispatcher = robot.world->getDispatcher();
     for (int i = 0; i < dispatcher->getNumManifolds(); i++) {
@@ -693,16 +705,33 @@ static void writeBodyFieldToDevice(size_t offset, const void* value, size_t size
         std::fprintf(stderr, "robot body field upload failed: %s\n", cudaGetErrorString(error));
 }
 
+static void uploadResetBodies();
+
 static void updateRenderTransforms() {
     if (h_robot_transforms.empty()) return;
+
+    // d_body owns the rendered robot root.  The body struct does not contain
+    // per-part orientations, so preserve Bullet's relative articulation while
+    // translating the complete pose to the root stored in d_body.  This keeps
+    // a CUDA reset visible without rebuilding an upright pose through a
+    // fallen Bullet root.
+    if (!syncBodiesFromDevice()) return;
+
     for (int i = 0; i < g_robot_count; i++) {
+        const body& state = h_bodies[i];
         const RobotPhysics& robot = g_robots[i];
+        if (!robot.parts[PART_PELVIS].body) continue;
+
+        btVector3 bodyRoot(state.positonX, state.positionY, state.positonZ);
+        btVector3 physicsRoot = currentRobotRoot(robot);
+        btVector3 rootDelta = bodyRoot - physicsRoot;
         for (int part = 0; part < NUM_PARTS; part++) {
             const btTransform& transform = robot.parts[part].body->getWorldTransform();
-            const btMatrix3x3& basis = transform.getBasis();
+
             RobotRenderTransform& output = h_robot_transforms[i * NUM_PARTS + part];
-            output.origin = make_float3(float(transform.getOrigin().x()),
-                float(transform.getOrigin().y()), float(transform.getOrigin().z()));
+            btVector3 center = transform.getOrigin() + rootDelta;
+            output.origin = make_float3(float(center.x()), float(center.y()), float(center.z()));
+            const btMatrix3x3& basis = transform.getBasis();
             btVector3 x = basis.getColumn(0), y = basis.getColumn(1), z = basis.getColumn(2);
             output.axisX = make_float3(float(x.x()), float(x.y()), float(x.z()));
             output.axisY = make_float3(float(y.x()), float(y.y()), float(y.z()));
@@ -711,6 +740,28 @@ static void updateRenderTransforms() {
     }
     cudaMemcpy(d_robot_transforms, h_robot_transforms.data(),
         h_robot_transforms.size() * sizeof(RobotRenderTransform), cudaMemcpyHostToDevice);
+}
+
+static void resetPendingRobots() {
+    if (g_robot_count <= 0 || g_robots.empty() || h_bodies.empty() ||
+        g_pending_resets.empty())
+        return;
+
+    bool resetNeeded = false;
+    for (int i = 0; i < g_robot_count; i++) {
+        if (!g_pending_resets[i]) continue;
+
+        createRobotPhysics(g_robots[i], initialRobotRoot(i));
+        fillInitialBody(h_bodies[i], i);
+        writeRobotStateToBody(g_robots[i], h_bodies[i]);
+        g_pending_resets[i] = 0;
+        resetNeeded = true;
+    }
+
+    if (!resetNeeded) return;
+
+    uploadResetBodies();
+    updateRenderTransforms();
 }
 
 static void addShadedBox(std::vector<rawTriangles3D>& tris,
@@ -842,6 +893,7 @@ void initrobot() {
     g_robot_count = activeRobotCount();
     g_robots.resize(g_robot_count);
     h_bodies.resize(g_robot_count);
+    g_pending_resets.assign(g_robot_count, 0);
     h_robot_transforms.resize(g_robot_count * NUM_PARTS);
 
     for (int i = 0; i < g_robot_count; i++) {
@@ -909,6 +961,19 @@ void updaterobot() {
         applyRobotMovement(robot, frameDt);
         robot.world->stepSimulation(frameDt, 8, fixedDt);
         writeRobotStateToBody(robot, h_bodies[i]);
+        if (h_bodies[i].robotPelvisTouchingGround ||
+            h_bodies[i].robotHeadTouchingGround ||
+            h_bodies[i].robotTorsoTouchingGround)
+            h_bodies[i].alive = false;
+
+        const float dx = h_bodies[i].positonX - targetx;
+        const float dz = h_bodies[i].positonZ - targetz;
+        const float targetRadius = std::max(0.0f, targetradious);
+        if (dx * dx + dz * dz <= targetRadius * targetRadius)
+            h_bodies[i].reached = true;
+
+        if (!h_bodies[i].alive || h_bodies[i].reached)
+            g_pending_resets[i] = 1;
     }
 
     syncBodiesToDevice();
@@ -923,7 +988,50 @@ void updaterobot() {
     }
 }
 
+static void uploadResetBodies() {
+    if (!d_body || h_bodies.empty() || g_robot_count <= 0) return;
+    cudaError_t error = cudaMemcpy(d_body, h_bodies.data(),
+        g_robot_count * sizeof(body), cudaMemcpyHostToDevice);
+    if (error != cudaSuccess) {
+        std::fprintf(stderr, "robot reset upload failed: %s\n",
+            cudaGetErrorString(error));
+        return;
+    }
+    g_last_device_body = d_body;
+    g_last_device_body_count = g_robot_count;
+    g_device_body_initialized = true;
+}
+
+void resetrobot(int id) {
+    if (id < 0 || id >= g_robot_count || id >= static_cast<int>(g_robots.size()) ||
+        id >= static_cast<int>(h_bodies.size()))
+        return;
+
+    createRobotPhysics(g_robots[id], initialRobotRoot(id));
+    fillInitialBody(h_bodies[id], id);
+    writeRobotStateToBody(g_robots[id], h_bodies[id]);
+    uploadResetBodies();
+    updateRenderTransforms();
+}
+
+void resetrobots() {
+    if (g_robot_count <= 0 || g_robots.empty() || h_bodies.empty()) return;
+
+    const int count = std::min(g_robot_count,
+        std::min(static_cast<int>(g_robots.size()), static_cast<int>(h_bodies.size())));
+    for (int i = 0; i < count; i++) {
+        createRobotPhysics(g_robots[i], initialRobotRoot(i));
+        fillInitialBody(h_bodies[i], i);
+        writeRobotStateToBody(g_robots[i], h_bodies[i]);
+        g_pending_resets[i] = 0;
+    }
+    uploadResetBodies();
+    updateRenderTransforms();
+}
+
 void renderRobot() {
+    resetPendingRobots();
+    updateRenderTransforms();
     render.rawTriangleBatchInterop3D(g_render_triangle_count, ROBOT_INTEROP_ID);
 }
 

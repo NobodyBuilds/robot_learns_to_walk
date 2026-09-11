@@ -59,12 +59,12 @@ __global__ void init_rng(curandState* state, int n, unsigned long seed) {
 		curand_init(seed, i, 0, &state[i]);
 	}
 }
-extern "C" void allocate() {
+void allocate() {
 	int n = robot_count;
 	cudaMalloc(&d_body, n * sizeof(body));
 	
 	cudaMalloc(&d_rngstate, robot_count * sizeof(curandState));
-	init_rng << <1, 1 >> > (d_rngstate, settings.cars, 3476);
+	init_rng << <1, 1 >> > (d_rngstate, robot_count, 3476);
 	printf("data allocated \n");
 }
 void setmaxdisttotarget() {
@@ -128,7 +128,8 @@ void setoffsets(bool isactor) {
 void initlayers() {
 	//easy configraton of layers
 	//actor network
-	addlayer(inputs, 128, true);
+	addlayer(inputs, 256, true);
+	addlayer(256, 128, true);
 	addlayer(128, 64, true);
 	addlayer(64, 32, true);
 	addlayer(32, output, true);
@@ -136,7 +137,8 @@ void initlayers() {
 
 	setoffsets(true);
 	//critic network
-	addlayer(inputs, 128, false);
+	addlayer(inputs, 256, false);
+	addlayer(256, 128, false);
 	addlayer(128, 64, false);
 	addlayer(64, 32, false);
 	addlayer(32, 1, false);
@@ -191,7 +193,7 @@ void initWB(float min, float max) {
 	readfiles("modeldata/actorbias.txt", actor_bias);
 	readfiles("modeldata/criticbias.txt", critic_bias);
 	if (actor_weights.size() != actor_weightbuffersize) {
-		printf("%d / %d \n", actor_weights.size(), actor_weightbuffersize);
+		printf("%zd / %d \n", actor_weights.size(), actor_weightbuffersize);
 		weightsloaded = false;
 	}
 	if (critic_weights.size() != critic_weightbuffersize) {
@@ -271,6 +273,7 @@ __device__ double MSE = 0.0f;
 
 
 __device__  int batchsize = 128;
+
 
 
 __device__ float leakyrelu(float x) {
@@ -458,11 +461,32 @@ __device__ float sigmoid(float x) {
 __device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* buffer, int s, int ci, curandState* d_rngstate) {
 	int action = 0;
 	int bidx = s * d.n + ci;
+	body b = d_body[ci];
+
+	b.hipjoints = nodevals[antityidx(D, 0, ci)];
+	b.hipJointSideways = nodevals[antityidx(D, 1, ci)];
+	b.leftElbowJoint = nodevals[antityidx(D, 2, ci)];;
+	b.rightElbowJoint = nodevals[antityidx(D, 3, ci)];
+	b.leftHipJointSideways = nodevals[antityidx(D, 4, ci)];
+	b.rightHipJointSideways = nodevals[antityidx(D, 5, ci)];
+	b.leftHipJointTwist = nodevals[antityidx(D, 6, ci)];
+	b.rightHipJointTwist = nodevals[antityidx(D, 7, ci)];
+	b.leftKneeJoint = nodevals[antityidx(D, 8, ci)];
+	b.rightKneeJoint = nodevals[antityidx(D, 9, ci)];
+	b.leftShoulderJoint = nodevals[antityidx(D, 10, ci)];
+	b.rightShoulderJoint = nodevals[antityidx(D, 11, ci)];
+	b.leftShoulderJointSideways = nodevals[antityidx(D, 12, ci)];
+	b.rightShoulderJointSideways = nodevals[antityidx(D, 13, ci)];
+	b.leftShoulderJointTwist = nodevals[antityidx(D, 14, ci)];
+	b.rightShoulderJointTwist = nodevals[antityidx(D, 15, ci)];
+	b.leftUpperLegJoint = nodevals[antityidx(D, 16, ci)];
+	b.rightUpperLegJoint = nodevals[antityidx(D, 17, ci)];
+
 	float m = nodevals[antityidx(D, 0, ci)];
 	for (int j = 1; j < 18; j++) m = fmaxf(m, nodevals[antityidx(D, j, ci)]);
 
 	float sum = 0.f;
-	float exps[6];
+	float exps[18];
 	for (int j = 0; j < 18; j++) {
 		exps[j] = expf(nodevals[antityidx(D, j, ci)] - m);
 		sum += exps[j];
@@ -488,28 +512,9 @@ __device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* bu
 	
 	//storing networks outputs directly for continues control
 
-	body b;
-
-	b.hipjoints = nodevals[antityidx(D, 0, ci)];
-	b.hipJointSideways= nodevals[antityidx(D, 1, ci)];
-	b.leftElbowJoint = nodevals[antityidx(D, 2, ci)];;
-	b.rightElbowJoint = nodevals[antityidx(D, 3, ci)];
-	b.leftHipJointSideways = nodevals[antityidx(D, 4, ci)];
-	b.rightHipJointSideways = nodevals[antityidx(D, 5, ci)];
-	b.leftHipJointTwist= nodevals[antityidx(D, 6, ci)];
-	b.rightHipJointTwist= nodevals[antityidx(D, 7, ci)];
-	b.leftKneeJoint= nodevals[antityidx(D, 8, ci)];
-	b.rightKneeJoint= nodevals[antityidx(D, 9, ci)];
-	b.leftShoulderJoint= nodevals[antityidx(D, 10, ci)];
-	b.rightShoulderJoint= nodevals[antityidx(D, 11, ci)];
-	b.leftShoulderJointSideways = nodevals[antityidx(D, 12, ci)];
-	b.rightShoulderJointSideways = nodevals[antityidx(D, 13, ci)];
-	b.leftShoulderJointTwist= nodevals[antityidx(D, 14, ci)];
-	b.rightShoulderJointTwist= nodevals[antityidx(D, 15, ci)];
-	b.leftUpperLegJoint= nodevals[antityidx(D, 16, ci)];
-	b.rightUpperLegJoint= nodevals[antityidx(D, 17, ci)];
 	
-
+	
+	d_body[ci] = b;
 
 
 	buffer[bidx].old_logprob = logf(fmaxf(nodevals[antityidx(D, action, ci)], 1e-8f));
@@ -542,32 +547,49 @@ __device__ float oldr = 0.0f;
 __device__ int id = 0;
 __device__ float DT = 1.0f / 120.0f;
 __device__ int logframe = 0;
-__global__ void reward_kernel(int n, int s, replaybuffer* buffer,body* d_body ,float rr, float cp, float dp, float dcr) {
+__device__ __forceinline__ void resetBody(body* bodies, int id)
+{
+	if (bodies == nullptr || id < 0 || id >= d.n)
+		return;
+
+	body reset{};
+	reset.positionY = 20.0f;
+	reset.positonX = 0.0f;
+	reset.positonZ = 0.0f;
+	reset.alive = true;
+	reset.reached = false;
+
+	bodies[id]=reset;
+}
+__global__ void reward_kernel(int n, int s, replaybuffer* buffer,body* d_body ,float aliver, float deadr, float winr, float feetr,float handr,float headr,float torsor,float reachr) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
 
-	body c = __ldg(&d_body[i]);
-	
+	body c = d_body[i];
+	float alivereward = aliver;
+	if (!c.alive)alivereward = deadr;
 	float dx = c.positonX - d.targetx;
 	float dy = c.positonZ - d.targetz;
 	float curdist = sqrtf(dx * dx + dy * dy);
+	float reached = c.reached ? winr : 0.0f;
 
-
-	//float prevdist = data2[i].x;
-	//float diff = prevdist - curdist;
-	float progressreward = 1.0f-( curdist / d.maxdisttotarget) ;
+	
+	float progressreward =reachr*( 1.0f-( curdist / d.maxdisttotarget)) ;
 	
 
 	
 
-	float reward = progressreward  ;
+	float reward = progressreward+ alivereward+ reached+feetr+handr+headr+torsor  ;
 
 
 	buffer[bidx].reward = reward;
 	
 	atomicAdd(&d_reward, reward);
-	
+	if (!c.alive || c.reached) {
+		
+		resetBody(d_body, i);
+	}
 
 }
 __device__ void getQvalue(int s, int c, int D, float* nodevals, replaybuffer* buffer) {
@@ -645,8 +667,8 @@ __global__ void firstlayerfrozen(int n, int s, int* indices, const float* __rest
 
 
 	float x = bias[idx(0, i)];
-	for (int k = 0; k < 32; k++) {
-		x += buffer[indices[s * batchsize + b]].s1[k] * weights[idx(0 + i * 32, k)];
+	for (int k = 0; k < 40; k++) {
+		x += buffer[indices[s * batchsize + b]].s1[k] * weights[idx(0 + i * 40, k)];
 
 	}
 	int off = b * nodedatasize + i;
@@ -676,7 +698,14 @@ __global__ void solvefrozenlayers(int n, int nin, int w, int D, int b, int p, bo
 
 }
 __device__ float normalize(float x,float max,float min){
-	return x - min / max - min;
+	return ((x - min) / (max - min)) * 2.0f - 1.0f;
+	//[-1,1] bounded for better normalization for values in a rnage
+}
+__device__ float boolTofloat(bool x) {
+	float a = 0.0f;
+	if (x)a = 1.0f;
+	if (!x)a = 0.0f;
+	return a;
 }
 __global__ void netkernel(int n,body* d_body, const float* __restrict__ weights,
 	const float* __restrict__ bias, float* nodevals, const Layer* layer, bool isactor, replaybuffer* buffer, int s, curandState* rng
@@ -705,13 +734,13 @@ __global__ void netkernel(int n,body* d_body, const float* __restrict__ weights,
 			
 
 
-				float input[34] = { dist / d.maxdisttotarget,
+				float input[40] = { dist / d.maxdisttotarget,
 					normalize(b.hipjoints,-30,50),
 
 
 					normalize(b.hipJointSideways,-10,45),
-					normalize(b.leftHipJointSideways,-10,50),
-					normalize(b.rightHipJointSideways,-10,50),
+					normalize(b.leftHipJointSideways,-10,45),
+					normalize(b.rightHipJointSideways,-10,45),
 					normalize(b.leftHipJointTwist,-45,45),
 					normalize(b.rightHipJointTwist,-45,45),
 
@@ -733,33 +762,39 @@ __global__ void netkernel(int n,body* d_body, const float* __restrict__ weights,
 					normalize(b.leftKneeJoint,0,140),
 					normalize(b.rightKneeJoint,0,140),
 
-					b.robotHeadTouchingGround,
+					boolTofloat(b.robotHeadTouchingGround),
 
-					b.robotLeftFootTouchingGround,
-					b.robotRightFootTouchingGround,
+					boolTofloat(b.robotLeftFootTouchingGround) ,
+					boolTofloat(b.robotRightFootTouchingGround) ,
 
-					b.robotLeftForearmTouchingGround,
-					b.robotRightForearmTouchingGround,
+					boolTofloat(b.robotLeftForearmTouchingGround) ,
+					boolTofloat(b.robotRightForearmTouchingGround) ,
 
-					b.robotLeftHandTouchingGround,
-					b.robotRightHandTouchingGround,
+					boolTofloat(b.robotLeftHandTouchingGround) ,
+					boolTofloat(b.robotRightHandTouchingGround) ,
 
-					b.robotLeftLowerLegTouchingGround,
-					b.robotRightLowerLegTouchingGround,
+					boolTofloat(b.robotLeftLowerLegTouchingGround) ,
+					boolTofloat(b.robotRightLowerLegTouchingGround) ,
 
-					b.robotLeftUpperArmTouchingGround,
-					b.robotRightUpperArmTouchingGround,
+					boolTofloat(b.robotLeftUpperArmTouchingGround) ,
+					boolTofloat(b.robotRightUpperArmTouchingGround) ,
 
-					b.robotLeftUpperLegTouchingGround,
-					b.robotRightUpperLegTouchingGround,
+					boolTofloat(b.robotLeftUpperLegTouchingGround) ,
+					boolTofloat(b.robotRightUpperLegTouchingGround) ,
 
-					b.robotPelvisTouchingGround,
-					b.robotTorsoTouchingGround
+					boolTofloat(b.robotPelvisTouchingGround) ,
+					boolTofloat(b.robotTorsoTouchingGround) ,
+					tanhf(b.velX/25.0f),
+					tanhf(b.velY/25.0f),
+					tanhf(b.velZ/25.0f),
+					tanhf(b.angleVelX/15.0f),
+					tanhf(b.angleVelY/15.0f),
+					tanhf(b.angleVelZ/15.0f),
 
 
 
 				};
-				int insize = 34;
+				int insize = 40;
 				if (isactor) {
 					int bidx = s * d.n + i;
 					for (int b = 0; b < insize; b++) {
@@ -769,7 +804,7 @@ __global__ void netkernel(int n,body* d_body, const float* __restrict__ weights,
 				}
 				int didx = layer[0].dIdx;
 
-				firstlayer(layer[0].Nout, i, 0, didx, 34, input, weights, bias, nodevals);
+				firstlayer(layer[0].Nout, i, 0, didx, 40, input, weights, bias, nodevals);
 			}
 			else {
 
@@ -803,10 +838,24 @@ __global__ void netkernel(int n,body* d_body, const float* __restrict__ weights,
 
 
 }
+__global__ void getdone(int n, body* b,replaybuffer* buffer,int s) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= n)return;
+	int bidx = s * d.n + i;
+	if (!b[i].alive || b[i].reached) {
+		
+		buffer[bidx].done = true;
+	}
+	else {
+		buffer[bidx].done = false;
+	}
+	
+}
 
 
-
-
+void checkdone(int step) {
+	getdone << <blocks(robot_count), threads >> > (robot_count, d_body, d_state, step);
+}
 void normalize_advantages() {
 
 	double zero = 0.0;
@@ -879,14 +928,14 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 
 }
 void reward(int s) {
-	reward_kernel << <blocks(settings.cars), threads >> > (settings.cars, s, d_state,d_body, 0, 0, 0, 0);
+	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state,d_body,alive,dead,win,feettouching,handtouching,headtouching,torsotouching,reachtarget );
 	
 
 
 }
 void computevals() {
 
-	computevalskernel << <blocks(settings.cars), threads >> > (settings.cars, settings.replaybuffersize / settings.cars, d_state);
+	computevalskernel << <blocks(robot_count), threads >> > (robot_count, replaybuffersize / robot_count, d_state);
 
 
 }
@@ -914,12 +963,12 @@ void backpropogation(int s, int curBatch, bool isactor) {
 		dim3 grid(blocks, curBatch);
 		if (isactor) {
 			compute_delta << <grid, threads >> > (n, d, l1out, l1w, l1nin, l1d, outlayer, isactor,
-				d_actor_nodvals, d_actor_delta, d_actor_weights, d_actor_preact, d_state, s, d_indices, actor_nodedatasize, settings.rolloutstep);
+				d_actor_nodvals, d_actor_delta, d_actor_weights, d_actor_preact, d_state, s, d_indices, actor_nodedatasize, rolloutstep);
 		}
 		else {
 
 			compute_delta << <grid, threads >> > (n, d, l1out, l1w, l1nin, l1d, outlayer, isactor,
-				d_critic_nodvals, d_critic_delta, d_critic_weights, d_critic_preact, d_state, s, d_indices, critic_nodedatasize, settings.rolloutstep);
+				d_critic_nodvals, d_critic_delta, d_critic_weights, d_critic_preact, d_state, s, d_indices, critic_nodedatasize, rolloutstep);
 		}
 
 
@@ -935,11 +984,11 @@ void backpropogation(int s, int curBatch, bool isactor) {
 		int lb = layerdata[l].bIdx;
 
 		if (isactor) {
-			tuneweights << <blocks, threads >> > (layerdata[l].Nout, nin, l, l1d, lw, lsize, d, lb, settings.lr,
+			tuneweights << <blocks, threads >> > (layerdata[l].Nout, nin, l, l1d, lw, lsize, d, lb, lr,
 				d_actor_nodvals, d_actor_weights, d_actor_delta, d_actor_bias, d_state, s, curBatch, actor_nodedatasize, d_indices, true, actor_adam_weights, actor_adam_bias, adam_step);
 		}
 		else {
-			tuneweights << <blocks, threads >> > (layerdata[l].Nout, nin, l, l1d, lw, lsize, d, lb, settings.lr,
+			tuneweights << <blocks, threads >> > (layerdata[l].Nout, nin, l, l1d, lw, lsize, d, lb, lr,
 				d_critic_nodvals, d_critic_weights, d_critic_delta, d_critic_bias, d_state, s, curBatch, critic_nodedatasize, d_indices, false, critic_adam_weights, critic_adam_bias, adam_step);
 		}
 
@@ -967,20 +1016,21 @@ void frozennet(bool isactor) {
 void net(int s, bool isactor) {
 
 	if (isactor) {
-		netkernel << <blocks(settings.cars), threads >> > (robot_count,d_body,  d_actor_weights, d_actor_bias, d_cars_nodevals, d_actlayer, isactor, d_state, s, d_rngstate);
+		netkernel << <blocks(robot_count), threads >> > (robot_count,d_body,  d_actor_weights, d_actor_bias, d_antity_nodevals, d_actlayer, isactor, d_state, s, d_rngstate);
 	}
 	else {
-		netkernel << <blocks(settings.cars), threads >> > (robot_count,d_body, d_critic_weights, d_critic_bias, d_cars_nodevals, d_critlayer, isactor, d_state, s, d_rngstate);
+		netkernel << <blocks(robot_count), threads >> > (robot_count,d_body, d_critic_weights, d_critic_bias, d_antity_nodevals, d_critlayer, isactor, d_state, s, d_rngstate);
 
 	}
 
 }
 
 void run_network() {
-
+	
 	net(step, true);//actor forward pass
 	net(step, false);//critic forward pass
 	updaterobot();
+	checkdone(step);
 	reward(step);
 	float h_reward = 0.0f;
 	float zero = 0.0f;
@@ -1102,13 +1152,14 @@ void restart() {
 	cudafree();
 
 	printf("memfree on restart \n");
+	robot_count = sample_robot_count;
 	actor_weightbuffersize = 0;
 	critic_weightbuffersize = 0;
 	actor_biassize = 0;
 	critic_biassize = 0;
 	actor_nodedatasize = 0;
 	rolloutstep = 0;
-
+	adam_step = 1;
 	step = 0;
 	gen = 0;
 	replaybuffersize = robot_count * 2048;
@@ -1116,7 +1167,7 @@ void restart() {
 	actor_layers = 0;
 	critic_layers = 0;
 
-	
+	initrobot();
 
 	initnetwork();
 	printf("network initialized \n");
