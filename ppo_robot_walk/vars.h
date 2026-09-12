@@ -96,8 +96,7 @@ inline __device__ float robotScale = 3.0f;
 inline float h_robotX = 0.0f;
 inline float h_robotY = 12.0f;
 inline float h_robotZ = 0.0f;
-inline float rotx = 0.0f;
-inline float roty = 0.0f;
+
 
 inline float h_robotMoveX = 0.0f;
 inline float h_robotMoveY = 0.0f;
@@ -234,18 +233,12 @@ inline float torsotouching = -0.0f;
 
 
 
-inline float x1 = -10.0f;
-inline float Y1 = 10.0f;
-inline float z1 = 0.0f;
-
-inline float x2 = 10.0f;
-inline float y2 = 10.0f;
-inline float z2 = 0.0f;
-
-inline float x3 = 10.0f;
-inline float y3 = -10.0f;
-inline float z3 = 0.0f;
-
-inline float x4 = -10.0f;
-inline float y4 = -10.0f;
-inline float z4 = 0.0f;
+inline float x = 0.0f;
+inline float y = 0.0f;
+inline float z = 0.0f;
+inline float sizex = 10.0f;
+inline float sizey = 10.0f;
+inline float sizez = 10.0f;
+inline float rotx = 0.0f;
+inline float roty = 0.0f;
+inline bool sidepivot = false;

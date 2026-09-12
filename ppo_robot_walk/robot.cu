@@ -97,8 +97,8 @@ void addpos(quadVertex3d& face, float x, float y, float z) {
 	face.z4 += z;
 }
 
-void getcube(std::vector<quadVertex3d> &data,float x,float y,float z, float width,float height,float r,float g,float b,float rotx,float roty,bool sidepivot) {
-
+void getcube(std::vector<quadVertex3d> &data,float x,float y,float z, float sizex,float sizey,float sizez,float r,float g,float b,float rotx,float roty,bool sidepivot) {
+	data.clear();
 
 		quadVertex3d f1;
 		quadVertex3d f2;
@@ -107,127 +107,151 @@ void getcube(std::vector<quadVertex3d> &data,float x,float y,float z, float widt
 		quadVertex3d f6;
 		quadVertex3d f4;
 
-	if (sidepivot) {
+        sizex = sizex / 2;
+        sizey = sizey / 2;
+        sizez = sizez / 2;
 
-		//sets pivot /origion point to sideward of the cube
-		f1.x1 = -width; f1.y1 = height; f1.z1 = 0;
-		f1.x2 = width; f1.y2 = height; f1.z2 = 0;
-		f1.x3 = width; f1.y3 = -height; f1.z3 = 0;
-		f1.x4 = -width; f1.y4 = -height; f1.z4 = 0;
+        if (sidepivot) {
 
-		f1.r = r;
-		f1.g = g;
-		f1.b = b;
+			f1.x1 = -sizex; f1.y1 = 0;         f1.z1 = 0;
+			f1.x2 = -sizex; f1.y2 = -2 * sizey; f1.z2 = 0;
+			f1.x3 = sizex; f1.y3 = -2 * sizey; f1.z3 = 0;
+			f1.x4 = sizex; f1.y4 = 0;         f1.z4 = 0;
 
-
-
-
-		f2.x1 = width; f2.y1 = height; f2.z1 = -2 * width;
-		f2.x2 = -width; f2.y2 = height; f2.z2 = -2 * width;
-		f2.x3 = -width; f2.y3 = -height; f2.z3 = -2 * width;
-		f2.x4 = width; f2.y4 = -height; f2.z4 = -2 * width;
-
-		f2.r = r;
-		f2.g = g;
-		f2.b = b;
+			f1.r = r * 0.9f;
+			f1.g = g * 0.9f;
+			f1.b = b * 0.9f;
 
 
+			// Back
+			f2.x1 = sizex; f2.y1 = 0;         f2.z1 = -sizez;
+			f2.x2 = sizex; f2.y2 = -2 * sizey;  f2.z2 = -sizez;
+			f2.x3 = -sizex; f2.y3 = -2 * sizey;  f2.z3 = -sizez;
+			f2.x4 = -sizex; f2.y4 = 0;         f2.z4 = -sizez;
+
+			f2.r = r * 0.5f;
+			f2.g = g * 0.5f;
+			f2.b = b * 0.5f;
 
 
-		f3.x1 = -width; f3.y1 = height; f3.z1 = -2 * width;
-		f3.x2 = -width; f3.y2 = height; f3.z2 = 0;
-		f3.x3 = -width; f3.y3 = -height; f3.z3 = 0;
-		f3.x4 = -width; f3.y4 = -height; f3.z4 = -2 * width;
+			// Left
+			f3.x1 = -sizex; f3.y1 = 0;         f3.z1 = -sizez;
+			f3.x2 = -sizex; f3.y2 = -2 * sizey;  f3.z2 = -sizez;
+			f3.x3 = -sizex; f3.y3 = -2 * sizey;  f3.z3 = 0;
+			f3.x4 = -sizex; f3.y4 = 0;         f3.z4 = 0;
 
-		f3.r = r;
-		f3.g = g;
-		f3.b = b;
-
-
-	
+			f3.r = r * 0.65f;
+			f3.g = g * 0.65f;
+			f3.b = b * 0.65f;
 
 
-		f4.x1 = width; f4.y1 = height; f4.z1 = 0;
-		f4.x2 = width; f4.y2 = height; f4.z2 = -2 * width;
-		f4.x3 = width; f4.y3 = -height; f4.z3 = -2 * width;
-		f4.x4 = width; f4.y4 = -height; f4.z4 = 0;
+			// Right
+			f4.x1 = sizex; f4.y1 = 0;         f4.z1 = 0;
+			f4.x2 = sizex; f4.y2 = -2 * sizey;  f4.z2 = 0;
+			f4.x3 = sizex; f4.y3 = -2 * sizey;  f4.z3 = -sizez;
+			f4.x4 = sizex; f4.y4 = 0;         f4.z4 = -sizez;
 
-		f4.r = r;
-		f4.g = g;
-		f4.b = b;
-
-
-		
+			f4.r = r * 0.8f;
+			f4.g = g * 0.8f;
+			f4.b = b * 0.8f;
 
 
-		f5.x1 = -width; f5.y1 = height; f5.z1 = -2 * width;
-		f5.x2 = width; f5.y2 = height; f5.z2 = -2 * width;
-		f5.x3 = width; f5.y3 = height; f5.z3 = 0;
-		f5.x4 = -width; f5.y4 = height; f5.z4 = 0;
+			// Top
+			f5.x1 = -sizex; f5.y1 = 0;         f5.z1 = -sizez;
+			f5.x2 = -sizex; f5.y2 = 0;         f5.z2 = 0;
+			f5.x3 = sizex; f5.y3 = 0;         f5.z3 = 0;
+			f5.x4 = sizex; f5.y4 = 0;         f5.z4 = -sizez;
 
-		f5.r = r;
-		f5.g = g;
-		f5.b = b;
-
-
-		
-
-		f6.x1 = -width; f6.y1 = -height; f6.z1 = 0;
-		f6.x2 = width; f6.y2 = -height; f6.z2 = 0;
-		f6.x3 = width; f6.y3 = -height; f6.z3 = -2 * width;
-		f6.x4 = -width; f6.y4 = -height; f6.z4 = -2 * width;
-
-		f6.r = r;
-		f6.g = g;
-		f6.b = b;
-
-	}
-	else {
+			f5.r = r;
+			f5.g = g;
+			f5.b = b;
 
 
+			// Bottom
+			f6.x1 = -sizex; f6.y1 = -2 * sizey; f6.z1 = 0;
+			f6.x2 = -sizex; f6.y2 = -2 * sizey; f6.z2 = -sizez;
+			f6.x3 = sizex; f6.y3 = -2 * sizey; f6.z3 = -sizez;
+			f6.x4 = sizex; f6.y4 = -2 * sizey; f6.z4 = 0;
+
+			f6.r = r * 0.4f;
+			f6.g = g * 0.4f;
+			f6.b = b * 0.4f;
+        }
+        else {
+
+            // Front
+            f1.x1 = -sizex; f1.y1 = sizey; f1.z1 = sizez;
+            f1.x2 = -sizex; f1.y2 = -sizey; f1.z2 = sizez;
+            f1.x3 = sizex; f1.y3 = -sizey; f1.z3 = sizez;
+            f1.x4 = sizex; f1.y4 = sizey; f1.z4 = sizez;
+
+            f1.r = r * 0.9f;
+            f1.g = g * 0.9f;
+            f1.b = b * 0.9f;
 
 
-		f1.x1 = -width; f1.y1 = height; f1.z1 = width;
-		f1.x2 = width; f1.y2 = height; f1.z2 = width;
-		f1.x3 = width; f1.y3 = -height; f1.z3 = width;
-		f1.x4 = -width; f1.y4 = -height; f1.z4 = width;
-		f1.r = r; f1.g = g; f1.b = b;
+            // Back
+            f2.x1 = sizex; f2.y1 = sizey; f2.z1 = -sizez;
+            f2.x2 = sizex; f2.y2 = -sizey; f2.z2 = -sizez;
+            f2.x3 = -sizex; f2.y3 = -sizey; f2.z3 = -sizez;
+            f2.x4 = -sizex; f2.y4 = sizey; f2.z4 = -sizez;
 
-		f2.x1 = width; f2.y1 = height; f2.z1 = -width;
-		f2.x2 = -width; f2.y2 = height; f2.z2 = -width;
-		f2.x3 = -width; f2.y3 = -height; f2.z3 = -width;
-		f2.x4 = width; f2.y4 = -height; f2.z4 = -width;
-		f2.r = r; f2.g = g; f2.b = b;
+            f2.r = r * 0.5f;
+            f2.g = g * 0.5f;
+            f2.b = b * 0.5f;
 
 
-		f3.x1 = -width; f3.y1 = height; f3.z1 = -width;
-		f3.x2 = -width; f3.y2 = height; f3.z2 = width;
-		f3.x3 = -width; f3.y3 = -height; f3.z3 = width;
-		f3.x4 = -width; f3.y4 = -height; f3.z4 = -width;
-		f3.r = r; f3.g = g; f3.b = b;
+            // Left
+            f3.x1 = -sizex; f3.y1 = sizey; f3.z1 = -sizez;
+            f3.x2 = -sizex; f3.y2 = -sizey; f3.z2 = -sizez;
+            f3.x3 = -sizex; f3.y3 = -sizey; f3.z3 = sizez;
+            f3.x4 = -sizex; f3.y4 = sizey; f3.z4 = sizez;
+
+            f3.r = r * 0.65f;
+            f3.g = g * 0.65f;
+            f3.b = b * 0.65f;
 
 
-		f4.x1 = width; f4.y1 = height; f4.z1 = width;
-		f4.x2 = width; f4.y2 = height; f4.z2 = -width;
-		f4.x3 = width; f4.y3 = -height; f4.z3 = -width;
-		f4.x4 = width; f4.y4 = -height; f4.z4 = width;
-		f4.r = r; f4.g = g; f4.b = b;
+            // Right
+            f4.x1 = sizex; f4.y1 = sizey; f4.z1 = sizez;
+            f4.x2 = sizex; f4.y2 = -sizey; f4.z2 = sizez;
+            f4.x3 = sizex; f4.y3 = -sizey; f4.z3 = -sizez;
+            f4.x4 = sizex; f4.y4 = sizey; f4.z4 = -sizez;
+
+            f4.r = r * 0.8f;
+            f4.g = g * 0.8f;
+            f4.b = b * 0.8f;
 
 
-		f5.x1 = -width; f5.y1 = height; f5.z1 = -width;
-		f5.x2 = width; f5.y2 = height; f5.z2 = -width;
-		f5.x3 = width; f5.y3 = height; f5.z3 = width;
-		f5.x4 = -width; f5.y4 = height; f5.z4 = width;
-		f5.r = r; f5.g = g; f5.b = b;
+            // Top
+            f5.x1 = -sizex; f5.y1 = sizey; f5.z1 = -sizez;
+            f5.x2 = -sizex; f5.y2 = sizey; f5.z2 = sizez;
+            f5.x3 = sizex; f5.y3 = sizey; f5.z3 = sizez;
+            f5.x4 = sizex; f5.y4 = sizey; f5.z4 = -sizez;
+
+            f5.r = r;
+            f5.g = g;
+            f5.b = b;
 
 
-		f6.x1 = -width; f6.y1 = -height; f6.z1 = width;
-		f6.x2 = width; f6.y2 = -height; f6.z2 = width;
-		f6.x3 = width; f6.y3 = -height; f6.z3 = -width;
-		f6.x4 = -width; f6.y4 = -height; f6.z4 = -width;
-		f6.r = r; f6.g = g; f6.b = b;
+            // Bottom
+            f6.x1 = -sizex; f6.y1 = -sizey; f6.z1 = sizez;
+            f6.x2 = -sizex; f6.y2 = -sizey; f6.z2 = -sizez;
+            f6.x3 = sizex; f6.y3 = -sizey; f6.z3 = -sizez;
+            f6.x4 = sizex; f6.y4 = -sizey; f6.z4 = sizez;
 
-	}
+            f6.r = r * 0.4f;
+            f6.g = g * 0.4f;
+            f6.b = b * 0.4f;
+        }
+
+
+	rotate(f1, rotx, roty);
+	rotate(f2, rotx, roty);
+	rotate(f3, rotx, roty);
+	rotate(f4, rotx, roty);
+	rotate(f5, rotx, roty);
+	rotate(f6, rotx, roty);
 
 	addpos(f1, x, y, z);
 	addpos(f2, x, y, z);
@@ -236,17 +260,20 @@ void getcube(std::vector<quadVertex3d> &data,float x,float y,float z, float widt
 	addpos(f5, x, y, z);
 	addpos(f6, x, y, z);
 
-	rotate(f1, rotx, roty);
-	rotate(f2, rotx, roty);
-	rotate(f3, rotx, roty);
-	rotate(f4, rotx, roty);
-	rotate(f5, rotx, roty);
-	rotate(f6, rotx, roty);
+
+	data.push_back(f1);
+	data.push_back(f2);
+	data.push_back(f3);
+	data.push_back(f4);
+	data.push_back(f5);
+	data.push_back(f6);
 }
 
 void initrobot() {
-	
+	getcube(data,x,y,z,sizex,sizey,sizez,0.3f,0.2f,0.6f,rotx,roty,false);
 }
+
 void renderRobot() {
-	render.quad3D(x1, Y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4, 0.4, 0.1, 0.1);
+	getcube(data, x, y, z, sizex,sizey, sizez, 0.4f, 0.8f, 0.6f, rotx, roty, sidepivot);
+	render.quad3DBatch(data);
 }

@@ -11,10 +11,10 @@
 #include "network.h"
 
 
-	float p1[3] = {0,0,0};
-	float p2[3] = {0,0,0};
-	float p3[3] = {0,0,0};
-	float p4[3] = {0,0,0};
+	float p[3] = {x,y,z};
+	float s[3] = {sizex,sizey,sizez};
+	float r[2] = {rotx,roty};
+	
 void renderUI() {
 	//static std::vector<float> learningCurve;
 	//static float lastLoss = 0.0f;
@@ -31,27 +31,22 @@ void renderUI() {
 	//bool sync = false;
 	ImGui::Begin("debug");
 	
-	ImGui::DragFloat3("1",p1, 0.1, -0.0f, 1000.0f);
-	ImGui::DragFloat3("2",p2, 0.1, -0.0f, 1000.0f);
-	ImGui::DragFloat3("3",p3, 0.1, -0.0f, 1000.0f);
-	ImGui::DragFloat3("4",p4, 0.1, -0.0f, 1000.0f);
-	
-	x1 = p1[0];
-	Y1 = p1[1];
-	z1 = p1[2];
+	ImGui::DragFloat3("pos", p,0.1f,-1000.0f,1000.0f);
+	ImGui::DragFloat3("size", s, 0.1f, 1.0f, 999.0f);
+	ImGui::DragFloat2("rot", r, 0.10f, -360.0f, 360.0f);
+	ImGui::Checkbox("side pivot", &sidepivot);
+	x = p[0];
+	y = p[1];
+	z = p[2];
 
-	x2 = p2[0];
-	y2 = p2[1];
-	z2 = p2[2];
+	sizex = s[0];
+	sizey = s[1];
+	sizez = s[2];
 
-	x3 = p3[0];
-	y3 = p3[1];
-	z3 = p3[2];
+	rotx = r[0];
+	roty = r[1];
 
-	x4 = p4[0];
-	y4 = p4[1];
-	z4 = p4[2];
-	
+
 	
 
 	//ImGui::Text("fps: %3f  time: %3f", avgFps, timer);
