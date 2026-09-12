@@ -42,7 +42,7 @@ int main()
 			run_network();
 		}
 		else {
-			updaterobot();
+			//updaterobot();
 		}
 		timer += dt;
 		renderfloor();
@@ -53,7 +53,7 @@ int main()
 		if (timer >= gentime) {
 			timer = 0.0f;
 			gen++;
-			resetrobots();
+			//resetrobots();
 		}
 		noRender.swapBuffers();
 

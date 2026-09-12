@@ -80,66 +80,6 @@ struct body {
 
 };
 
-//inline __device__ float robotX = 0.0f;
-//inline __device__ float robotY = 0.0f;
-//inline __device__ float robotZ = 0.0f;
-//// 3D locomotion command in the robot's local frame. Values are acceleration
-//// requests in m/s^2 and are applied through Bullet, so gravity and contacts
-//// still affect the resulting motion.
-//
-//inline __device__ float robotMoveX = 0.0f;
-//inline __device__ float robotMoveY = 0.0f;
-//inline __device__ float robotMoveZ = 0.0f;
-//
-////joints values
-//inline __device__ float leftShoulderJoint = 0.0f;
-//inline __device__ float leftShoulderJointSideways = 0.0f;
-//inline __device__ float leftShoulderJointTwist = 0.0f;
-//inline __device__ float leftElbowJoint = 0.0f;
-
-//inline __device__ float rightShoulderJoint = 0.0f;
-//inline __device__ float rightShoulderJointSideways = 0.0f;
-//inline __device__ float rightShoulderJointTwist = 0.0f;
-//inline __device__ float rightElbowJoint = 0.0f;
-
-
-//inline __device__ float hipjoints = 0.0f;
-//inline __device__ float rightHipJointSideways = 0.0f;
-//inline __device__ float leftHipJointSideways = 0.0f;
-//inline __device__ float leftHipJointTwist = 0.0f;
-//
-//
-//inline __device__ float leftUpperLegJoint = 0.0f;
-//inline __device__ float leftKneeJoint = 0.0f;
-//inline __device__ float rightUpperLegJoint = 0.0f;
-//inline __device__ float rightKneeJoint = 0.0f;
-//
-//
-//
-//inline __device__ float hipJointSideways = 0.0f;
-//inline __device__ float rightHipJointTwist = 0.0f;
-//
-//
-//inline constexpr int ROBOT_PART_COUNT = 15;
-//inline __device__ bool robotPartTouchingGround[ROBOT_PART_COUNT] = {};
-//inline __device__ bool robotAnyPartTouchingGround = false;
-//
-//
-//inline __device__ bool robotPelvisTouchingGround = false;
-//inline __device__ bool robotTorsoTouchingGround = false;
-//inline __device__ bool robotHeadTouchingGround = false;
-//inline __device__ bool robotLeftUpperLegTouchingGround = false;
-//inline __device__ bool robotLeftLowerLegTouchingGround = false;
-//inline __device__ bool robotLeftFootTouchingGround = false;
-//inline __device__ bool robotRightUpperLegTouchingGround = false;
-//inline __device__ bool robotRightLowerLegTouchingGround = false;
-//inline __device__ bool robotRightFootTouchingGround = false;
-//inline __device__ bool robotLeftUpperArmTouchingGround = false;
-//inline __device__ bool robotLeftForearmTouchingGround = false;
-//inline __device__ bool robotLeftHandTouchingGround = false;
-//inline __device__ bool robotRightUpperArmTouchingGround = false;
-//inline __device__ bool robotRightForearmTouchingGround = false;
-//inline __device__ bool robotRightHandTouchingGround = false;
 
 
 
@@ -150,12 +90,14 @@ inline __device__ float bounce = 0.0f;
 inline __device__ float deltaTime = 1.0f/120.0f;
 
 inline __device__ float robotScale = 3.0f;
-inline __device__ float d_floorY = 0.0f;
+
 
 // Host variables for UI
 inline float h_robotX = 0.0f;
 inline float h_robotY = 12.0f;
 inline float h_robotZ = 0.0f;
+inline float rotx = 0.0f;
+inline float roty = 0.0f;
 
 inline float h_robotMoveX = 0.0f;
 inline float h_robotMoveY = 0.0f;
@@ -180,11 +122,11 @@ inline float h_rightHipJointTwist = 0.0f;
 inline float h_leftKneeJoint = 0.0f;
 inline float h_rightKneeJoint = 0.0f;
 
-inline float h_gravity = -49.8f;
+inline float h_gravity = -9.8f;
 inline float h_friction = 0.9f;
 inline float h_drag = 0.98f;
 inline float h_bounce = 0.0f;
-inline float h_robotScale = 3.0f;
+inline float h_robotScale = 1.0f;
 
 /////
 //env
@@ -226,7 +168,8 @@ struct replaybuffer {
 	float value;
 	float rtg;
 	float advantage;
-	int action;
+	float action[18];
+	float actionZ[18];
 
 	bool done;
 };
@@ -288,3 +231,21 @@ inline float feettouching = 1.0f;
 inline float handtouching = -1.0f;
 inline float headtouching = -0.0f;
 inline float torsotouching = -0.0f;
+
+
+
+inline float x1 = -10.0f;
+inline float Y1 = 10.0f;
+inline float z1 = 0.0f;
+
+inline float x2 = 10.0f;
+inline float y2 = 10.0f;
+inline float z2 = 0.0f;
+
+inline float x3 = 10.0f;
+inline float y3 = -10.0f;
+inline float z3 = 0.0f;
+
+inline float x4 = -10.0f;
+inline float y4 = -10.0f;
+inline float z4 = 0.0f;

@@ -53,6 +53,7 @@ void geterror(const std::string& label, cudaError_t err) {
 }
 
 curandState* d_rngstate;
+constexpr float ACTION_SIGMA = 0.6f;
 
 __global__ void init_rng(curandState* state, int n, unsigned long seed) {
 	for (int i = 0; i < n; i++) {
@@ -128,19 +129,19 @@ void setoffsets(bool isactor) {
 void initlayers() {
 	//easy configraton of layers
 	//actor network
-	addlayer(inputs, 256, true);
-	addlayer(256, 128, true);
+	addlayer(inputs, 128, true);
 	addlayer(128, 64, true);
 	addlayer(64, 32, true);
+	addlayer(32, 32, true);
 	addlayer(32, output, true);
 
 
 	setoffsets(true);
 	//critic network
-	addlayer(inputs, 256, false);
-	addlayer(256, 128, false);
+	addlayer(inputs, 128, false);
 	addlayer(128, 64, false);
 	addlayer(64, 32, false);
+	addlayer(32, 32, false);
 	addlayer(32, 1, false);
 
 
@@ -278,7 +279,8 @@ __device__  int batchsize = 128;
 
 __device__ float leakyrelu(float x) {
 
-	return (x > 0.f) ? x : 0.01f * x;
+	//return (x > 0.f) ? x : 0.01f * x;
+	return tanhf(x);
 
 }
 __device__ __forceinline__ void firstlayer(int n, int ci, int w, int D, int inputs, float* input, const float* __restrict__ weights, const float* __restrict__ bias, float* nodevals) {
@@ -352,18 +354,9 @@ __global__ void compute_delta(int n, int d, int l1_nout, int l1w, int l1_nin, in
 	if (outlayer) {
 		if (isactor) {
 			float coeff = get_lClip(buffer, bidx);
-			float pi_i = nodedata[b * nodedatasize + d + i];
-			float y = (i == buffer[bidx].action) ? 1.0f : 0.0f;
-
-			float H = 0.0f;
-			for (int j = 0; j < n; j++) {
-				float pj = nodedata[b * nodedatasize + d + j];
-				H -= pj * logf(fmaxf(pj, 1e-8f));
-			}
-
-			float entropybonus = beta * pi_i * (logf(fmaxf(pi_i, 1e-8f)) + H);
-
-			dDelta[b * nodedatasize + d + i] = coeff * (y - pi_i) + entropybonus;
+			float mean = nodedata[b * nodedatasize + d + i];
+			float diff = buffer[bidx].actionZ[i] - mean;
+			dDelta[b * nodedatasize + d + i] = coeff * diff / (ACTION_SIGMA * ACTION_SIGMA);
 
 		}
 		else {
@@ -458,89 +451,88 @@ __device__ float sigmoid(float x) {
 	return  1.0f / (1.0f + expf(-x));
 
 }
+__device__ float actionTarget(int j, float action) {
+	float lo = 0.0f;
+	float hi = 0.0f;
+	switch (j) {
+	case 0: lo = -30.0f; hi = 50.0f; break;
+	case 1: lo = -10.0f; hi = 45.0f; break;
+	case 2: lo = 0.0f; hi = 150.0f; break;
+	case 3: lo = 0.0f; hi = 150.0f; break;
+	case 4: lo = -10.0f; hi = 45.0f; break;
+	case 5: lo = -10.0f; hi = 45.0f; break;
+	case 6: lo = -45.0f; hi = 45.0f; break;
+	case 7: lo = -45.0f; hi = 45.0f; break;
+	case 8: lo = 0.0f; hi = 140.0f; break;
+	case 9: lo = 0.0f; hi = 140.0f; break;
+	case 10: lo = -60.0f; hi = 170.0f; break;
+	case 11: lo = -60.0f; hi = 170.0f; break;
+	case 12: lo = -90.0f; hi = 90.0f; break;
+	case 13: lo = -90.0f; hi = 90.0f; break;
+	case 14: lo = -90.0f; hi = 90.0f; break;
+	case 15: lo = -90.0f; hi = 90.0f; break;
+	case 16: lo = -30.0f; hi = 100.0f; break;
+	case 17: lo = -30.0f; hi = 100.0f; break;
+	}
+	return lo + 0.5f * (action + 1.0f) * (hi - lo);
+}
+__device__ void setJointAction(body& b, int j, float value) {
+	switch (j) {
+	case 0: b.hipjoints = value; break;
+	case 1: b.hipJointSideways = value; break;
+	case 2: b.leftElbowJoint = value; break;
+	case 3: b.rightElbowJoint = value; break;
+	case 4: b.leftHipJointSideways = value; break;
+	case 5: b.rightHipJointSideways = value; break;
+	case 6: b.leftHipJointTwist = value; break;
+	case 7: b.rightHipJointTwist = value; break;
+	case 8: b.leftKneeJoint = value; break;
+	case 9: b.rightKneeJoint = value; break;
+	case 10: b.leftShoulderJoint = value; break;
+	case 11: b.rightShoulderJoint = value; break;
+	case 12: b.leftShoulderJointSideways = value; break;
+	case 13: b.rightShoulderJointSideways = value; break;
+	case 14: b.leftShoulderJointTwist = value; break;
+	case 15: b.rightShoulderJointTwist = value; break;
+	case 16: b.leftUpperLegJoint = value; break;
+	case 17: b.rightUpperLegJoint = value; break;
+	}
+}
+__device__ float tanhGaussianLogProb(float z, float action, float mean) {
+	float diff = z - mean;
+	return -0.5f * diff * diff / (ACTION_SIGMA * ACTION_SIGMA)
+		- logf(ACTION_SIGMA)
+		- 0.9189385332f
+		- logf(fmaxf(1.0f - action * action, 1e-6f));
+}
 __device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* buffer, int s, int ci, curandState* d_rngstate) {
-	int action = 0;
 	int bidx = s * d.n + ci;
 	body b = d_body[ci];
-
-	b.hipjoints = nodevals[antityidx(D, 0, ci)];
-	b.hipJointSideways = nodevals[antityidx(D, 1, ci)];
-	b.leftElbowJoint = nodevals[antityidx(D, 2, ci)];;
-	b.rightElbowJoint = nodevals[antityidx(D, 3, ci)];
-	b.leftHipJointSideways = nodevals[antityidx(D, 4, ci)];
-	b.rightHipJointSideways = nodevals[antityidx(D, 5, ci)];
-	b.leftHipJointTwist = nodevals[antityidx(D, 6, ci)];
-	b.rightHipJointTwist = nodevals[antityidx(D, 7, ci)];
-	b.leftKneeJoint = nodevals[antityidx(D, 8, ci)];
-	b.rightKneeJoint = nodevals[antityidx(D, 9, ci)];
-	b.leftShoulderJoint = nodevals[antityidx(D, 10, ci)];
-	b.rightShoulderJoint = nodevals[antityidx(D, 11, ci)];
-	b.leftShoulderJointSideways = nodevals[antityidx(D, 12, ci)];
-	b.rightShoulderJointSideways = nodevals[antityidx(D, 13, ci)];
-	b.leftShoulderJointTwist = nodevals[antityidx(D, 14, ci)];
-	b.rightShoulderJointTwist = nodevals[antityidx(D, 15, ci)];
-	b.leftUpperLegJoint = nodevals[antityidx(D, 16, ci)];
-	b.rightUpperLegJoint = nodevals[antityidx(D, 17, ci)];
-
-	float m = nodevals[antityidx(D, 0, ci)];
-	for (int j = 1; j < 18; j++) m = fmaxf(m, nodevals[antityidx(D, j, ci)]);
-
-	float sum = 0.f;
-	float exps[18];
+	float oldLogprob = 0.0f;
 	for (int j = 0; j < 18; j++) {
-		exps[j] = expf(nodevals[antityidx(D, j, ci)] - m);
-		sum += exps[j];
-	}//sum all vals
-
-	for (int j = 0; j < 18; j++) {
-		nodevals[antityidx(D, j, ci)] = exps[j] / sum;
-
-	}//probs
-
-
-
-
-	float r = curand_uniform(&d_rngstate[ci]);
-
-	float cum = 0.f;
-	for (int j = 0; j < 18; j++) {
-		cum += nodevals[antityidx(D, j, ci)];
-
-		if (r <= cum || j == 17) { action = j; break; }
+		float mean = nodevals[antityidx(D, j, ci)];
+		float z = mean + ACTION_SIGMA * curand_normal(&d_rngstate[ci]);
+		float action = tanhf(z);
+		buffer[bidx].action[j] = action;
+		buffer[bidx].actionZ[j] = z;
+		setJointAction(b, j, actionTarget(j, action));
+		oldLogprob += tanhGaussianLogProb(z, action, mean);
 	}
-	buffer[bidx].action = action;
-	
-	//storing networks outputs directly for continues control
-
-	
-	
 	d_body[ci] = b;
-
-
-	buffer[bidx].old_logprob = logf(fmaxf(nodevals[antityidx(D, action, ci)], 1e-8f));
-
-
-
-
-
+	buffer[bidx].old_logprob = oldLogprob;
 }
 __global__ void getlog(int n, int d, int* indices, replaybuffer* buffer, int s, float* nodevals, int nodedatasize) {
 
 	int b = blockIdx.x * blockDim.x + threadIdx.x;
 	if (b >= n)return;
 	int off = b * nodedatasize;
-	float m = nodevals[off + d];
-	for (int j = 1; j < 18; j++) m = fmaxf(m, nodevals[off + d + j]);
-	float sum = 0.f, exps[18];
-	for (int j = 0; j < 18; j++) { exps[j] = expf(nodevals[off + d + j] - m); sum += exps[j]; }
-	for (int j = 0; j < 18; j++) nodevals[off + d + j] = exps[j] / sum;
-
 	int bidx = indices[s * batchsize + b];
-	int action = buffer[bidx].action;
-	buffer[bidx].logprob = logf(fmaxf(nodevals[off + d + action], 1e-8f));
-
-
-
+	float logprob = 0.0f;
+	for (int j = 0; j < 18; j++) {
+		float mean = nodevals[off + d + j];
+		logprob += tanhGaussianLogProb(buffer[bidx].actionZ[j], buffer[bidx].action[j], mean);
+	}
+	buffer[bidx].logprob = logprob;
 }
 __device__ float d_reward = 0.0f;
 __device__ float oldr = 0.0f;
@@ -577,10 +569,28 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer,body* d_body ,f
 	
 	float progressreward =reachr*( 1.0f-( curdist / d.maxdisttotarget)) ;
 	
+	float a = 0.0f;
+	if (c.robotLeftFootTouchingGround || c.robotRightFootTouchingGround) {
+		a = feetr;
+	}
+	float b = 0.0f;
+	if (c.robotHeadTouchingGround ) {
+		b = headr;
+	}
+	float C = 0.0f;
+	if (c.robotTorsoTouchingGround ) {
+		C = torsor;
+	}
+	float d = 0.0f;
+		if (c.robotLeftHandTouchingGround||c.robotRightHandTouchingGround) {
+			d = torsor;
+		}
+		float knee = 0.0f;
+		if (c.robotLeftLowerLegTouchingGround || c.robotRightLowerLegTouchingGround) {
+			knee = -1.0f;
+		}
 
-	
-
-	float reward = progressreward+ alivereward+ reached+feetr+handr+headr+torsor  ;
+	float reward = progressreward+ alivereward+ reached +a+b+C+d+knee + c.positionY ;
 
 
 	buffer[bidx].reward = reward;
@@ -800,6 +810,12 @@ __global__ void netkernel(int n,body* d_body, const float* __restrict__ weights,
 					for (int b = 0; b < insize; b++) {
 						buffer[bidx].s1[b] = input[b];
 
+					}
+				}
+				else {
+					int bidx = s * d.n + i;
+					for (int b = 0; b < insize; b++) {
+						input[b] = buffer[bidx].s1[b];
 					}
 				}
 				int didx = layer[0].dIdx;
@@ -1029,7 +1045,7 @@ void run_network() {
 	
 	net(step, true);//actor forward pass
 	net(step, false);//critic forward pass
-	updaterobot();
+	//updaterobot();
 	checkdone(step);
 	reward(step);
 	float h_reward = 0.0f;

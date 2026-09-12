@@ -8,5 +8,5 @@ debug/
 release/
 .git/
 *.exe
-third_party/bullet3/build/
-third_party/bullet3/*.obj
+third_party/mujoco/
+mujoco.dll

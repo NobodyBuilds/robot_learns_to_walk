@@ -1,4 +1,7 @@
 #include <iostream>
+#include <cfloat>
+#include <cmath>
+#include <vector>
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -6,16 +9,59 @@
 #include "render.h"
 #include "ui.h"
 #include "network.h"
+
+
+	float p1[3] = {0,0,0};
+	float p2[3] = {0,0,0};
+	float p3[3] = {0,0,0};
+	float p4[3] = {0,0,0};
 void renderUI() {
+	//static std::vector<float> learningCurve;
+	//static float lastLoss = 0.0f;
+	//static bool hasLoss = false;
+	//if (std::isfinite(mloss) && (!hasLoss || mloss != lastLoss)) {
+	//	learningCurve.push_back(mloss);
+	//	lastLoss = mloss;
+	//	hasLoss = true;
+	//	if (learningCurve.size() > 512) learningCurve.erase(learningCurve.begin());
+	//}
 	ImGui_ImplOpenGL3_NewFrame();
 	ImGui_ImplGlfw_NewFrame();
 	ImGui::NewFrame();
-	bool sync = false;
+	//bool sync = false;
 	ImGui::Begin("debug");
-	ImGui::Text("fps: %3f  time: %3f", avgFps, timer);
+	
+	ImGui::DragFloat3("1",p1, 0.1, -0.0f, 1000.0f);
+	ImGui::DragFloat3("2",p2, 0.1, -0.0f, 1000.0f);
+	ImGui::DragFloat3("3",p3, 0.1, -0.0f, 1000.0f);
+	ImGui::DragFloat3("4",p4, 0.1, -0.0f, 1000.0f);
+	
+	x1 = p1[0];
+	Y1 = p1[1];
+	z1 = p1[2];
 
-	ImGui::Text("Gen: %d  rollout gen %d  buffer %d / %d  time:%f", gen, rolloutstep, step * robot_count, replaybuffersize, rollout_time);
+	x2 = p2[0];
+	y2 = p2[1];
+	z2 = p2[2];
 
+	x3 = p3[0];
+	y3 = p3[1];
+	z3 = p3[2];
+
+	x4 = p4[0];
+	y4 = p4[1];
+	z4 = p4[2];
+	
+	
+
+	//ImGui::Text("fps: %3f  time: %3f", avgFps, timer);
+	//
+	//ImGui::Text("Gen: %d  rollout gen %d  buffer %d / %d  time:%f", gen, rolloutstep, step * robot_count, replaybuffersize, rollout_time);
+	//ImGui::Text("mse: %5f prev %5f ", mloss, oldmloss);
+	//ImGui::Text("Learning curve");
+	//if (!learningCurve.empty()) {
+	//	ImGui::PlotLines("##learning_curve", learningCurve.data(), (int)learningCurve.size(), 0, nullptr, 0.0f, FLT_MAX, ImVec2(0.0f, 140.0f));
+	//}
 	//if(ImGui::DragFloat("floorX", &floorX, 0.1f)) { }
 	//if(ImGui::DragFloat("floorY", &floorY, 0.1f)) { syncvar(0); }
 	//ImGui::DragFloat("floorZ", &floorZ, 0.1f);
@@ -23,28 +69,33 @@ void renderUI() {
 	//ImGui::DragFloat("floorRotationY", &floorRotationY, 0.1f);
 	
 
-	ImGui::Separator();
-	ImGui::Text("Robot Position (Reset)");
-	if(ImGui::DragFloat("robotX", &h_robotX, 0.1f)) { syncvar(6); }
-	if(ImGui::DragFloat("robotY", &h_robotY, 0.1f)) { syncvar(7); }
-	if(ImGui::DragFloat("robotZ", &h_robotZ, 0.1f)) { syncvar(8); }
-	if (ImGui::InputInt("num robots", &sample_robot_count, 1, 100)) {
-		restart();
-	}
+	//ImGui::Separator();
+	//ImGui::Text("Robot Position (Reset)");
+	//if(ImGui::DragFloat("robotX", &h_robotX, 0.1f)) {  }
+	//if(ImGui::DragFloat("robotY", &h_robotY, 0.1f)) {  }
+	//if(ImGui::DragFloat("robotZ", &h_robotZ, 0.1f)) {  }
+	//ImGui::DragFloat("robotScale", &h_robotScale, 0.1f);
+	//ImGui::DragFloat("rotx", &rotx, 0.1f);
+	//ImGui::DragFloat("roty", &roty, 0.1f);
 
-	ImGui::Checkbox("run ai", &run_ai);
+
+	//if (ImGui::InputInt("num robots", &sample_robot_count, 1, 100)) {
+	//	restart();
+	//}
+
+	/*ImGui::Checkbox("run ai", &run_ai);
 	if (run_ai) { ImGui::Checkbox("training", &training); }
-	if (training) { ImGui::InputInt("rollout epochs", &rollout_epoch,1,100); }
+	if (training) { ImGui::InputInt("rollout epochs", &rollout_epoch,1,100); }*/
 
-	ImGui::Text("rewards");
-	ImGui::DragFloat("alive reward", &alive, 0.01f, 0.0f, 100.0f);
-	ImGui::DragFloat("dead reward", &dead, 0.01f, 0.0f, 100.0f);
-	ImGui::DragFloat("win reward", &win, 0.01f, 0.0f, 100.0f);
-	ImGui::DragFloat("reach target reward", &reachtarget, 0.01f, 0.0f, 100.0f);
-	ImGui::DragFloat("feet touching reward", &feettouching, 0.01f, -100.0f, 100.0f);
-	ImGui::DragFloat("hand touching reward", &handtouching, 0.01f, -100.0f, 100.0f);
-	ImGui::DragFloat("head touching reward", &headtouching, 0.01f, -100.0f, 100.0f);
-	ImGui::DragFloat("torso touching reward", &torsotouching, 0.01f, -100.0f, 100.0f);
+	//ImGui::Text("rewards");
+	//ImGui::DragFloat("alive reward", &alive, 0.01f, 0.0f, 100.0f);
+	//ImGui::DragFloat("dead reward", &dead, 0.01f, 0.0f, 100.0f);
+	//ImGui::DragFloat("win reward", &win, 0.01f, 0.0f, 100.0f);
+	//ImGui::DragFloat("reach target reward", &reachtarget, 0.01f, 0.0f, 100.0f);
+	//ImGui::DragFloat("feet touching reward", &feettouching, 0.01f, -100.0f, 100.0f);
+	//ImGui::DragFloat("hand touching reward", &handtouching, 0.01f, -100.0f, 100.0f);
+	//ImGui::DragFloat("head touching reward", &headtouching, 0.01f, -100.0f, 100.0f);
+	//ImGui::DragFloat("torso touching reward", &torsotouching, 0.01f, -100.0f, 100.0f);
 	//ImGui::Separator();
 	//ImGui::Text("Robot 3D Movement (local acceleration)");
 	//if(ImGui::DragFloat("robotMoveX", &h_robotMoveX, 0.1f, -25.0f, 25.0f)) { syncvar(29); }
@@ -71,18 +122,17 @@ void renderUI() {
 	//if(ImGui::DragFloat("rightHipJointTwist", &h_rightHipJointTwist, 1.0f, -45.0f, 45.0f)) { syncvar(28); }
 	//if(ImGui::DragFloat("leftKneeJoint", &h_leftKneeJoint, 1.0f)) { syncvar(17); }
 	//if(ImGui::DragFloat("rightKneeJoint", &h_rightKneeJoint, 1.0f)) { syncvar(18); }
-	ImGui::Text("Robot Physics");
-	if(ImGui::DragFloat("gravity", &h_gravity, 0.1f)) { syncvar(1); }
-	if(ImGui::DragFloat("friction", &h_friction, 0.01f)) { syncvar(2); }
-	if(ImGui::DragFloat("drag", &h_drag, 0.01f)) { syncvar(3); }
-	if(ImGui::DragFloat("bounce", &h_bounce, 0.01f)) { syncvar(4); }
-	if(ImGui::DragFloat("robotScale", &h_robotScale, 0.1f)) { syncvar(5); }
+//	ImGui::Text("Robot Physics");
+//	if(ImGui::DragFloat("gravity", &h_gravity, 0.1f)) { syncvar(1); }
+//	if(ImGui::DragFloat("friction", &h_friction, 0.01f)) { syncvar(2); }
+//	if(ImGui::DragFloat("drag", &h_drag, 0.01f)) { syncvar(3); }
+//	if(ImGui::DragFloat("bounce", &h_bounce, 0.01f)) { syncvar(4); }
 
-	ImGui::DragFloat("target x ", &targetx, 0.1f, 0.0f, 1000.0f);
-	ImGui::DragFloat("target z ", &targetz, 0.1f, 0.0f, 1000.0f);
-	ImGui::DragFloat("target size ", &targetradious, 0.1f, 0.0f, 1000.0f);
-	ImGui::DragFloat("target rot x ", &trx, 0.1f, -360.0f, 360.0f);
-	ImGui::DragFloat("target rot y ", &Try, 0.1f, -360.0f, 360.0f);
+	//ImGui::DragFloat("target x ", &targetx, 0.1f, 0.0f, 1000.0f);
+	//ImGui::DragFloat("target z ", &targetz, 0.1f, 0.0f, 1000.0f);
+	//ImGui::DragFloat("target size ", &targetradious, 0.1f, 0.0f, 1000.0f);
+	//ImGui::DragFloat("target rot x ", &trx, 0.1f, -360.0f, 360.0f);
+	//ImGui::DragFloat("target rot y ", &Try, 0.1f, -360.0f, 360.0f);
 
 	//if(ImGui::DragFloat("floorwidth", &floorwidth, 1.0f)) {
 	//	pixelx = floorwidth / pixelWidth;
