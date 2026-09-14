@@ -236,9 +236,9 @@ inline float torsotouching = -0.0f;
 inline float x = 0.0f;
 inline float y = 0.0f;
 inline float z = 0.0f;
-inline float sizex = 10.0f;
-inline float sizey = 10.0f;
-inline float sizez = 10.0f;
-inline float rotx = 0.0f;
-inline float roty = 0.0f;
-inline bool sidepivot = false;
+inline float scale = 1.0f;
+inline float r=1.0f;
+inline float g=1.0f;
+inline float b=1.0f;
+
+float h_toso

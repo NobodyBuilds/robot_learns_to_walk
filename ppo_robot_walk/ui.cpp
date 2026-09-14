@@ -12,8 +12,9 @@
 
 
 	float p[3] = {x,y,z};
+	float color[3] = {x,y,z};
 	float s[3] = {sizex,sizey,sizez};
-	float r[2] = {rotx,roty};
+	float rot[2] = {rotx,roty};
 	
 void renderUI() {
 	//static std::vector<float> learningCurve;
@@ -33,8 +34,15 @@ void renderUI() {
 	
 	ImGui::DragFloat3("pos", p,0.1f,-1000.0f,1000.0f);
 	ImGui::DragFloat3("size", s, 0.1f, 1.0f, 999.0f);
-	ImGui::DragFloat2("rot", r, 0.10f, -360.0f, 360.0f);
+	ImGui::DragFloat2("rot", rot, 0.10f, -360.0f, 360.0f);
+	ImGui::DragFloat3("color", color, 0.005f, -0.0f, 1.0f);
 	ImGui::Checkbox("side pivot", &sidepivot);
+	
+
+	if (ImGui::Button("add cube")) {
+		addpart();
+		
+	}
 	x = p[0];
 	y = p[1];
 	z = p[2];
@@ -43,10 +51,12 @@ void renderUI() {
 	sizey = s[1];
 	sizez = s[2];
 
-	rotx = r[0];
-	roty = r[1];
+	rotx = rot[0];
+	roty = rot[1];
 
-
+	r = color[0];
+	g = color[1];
+	b = color[2];
 	
 
 	//ImGui::Text("fps: %3f  time: %3f", avgFps, timer);

@@ -2,53 +2,34 @@
 #include "norender.h"
 #include "vars.h"
 #include "render.h"
+using namespace std;
+
+std::vector<quadVertex3d>renderdata;
 
 
-std::vector<quadVertex3d>data;
-//inline float x1 = -10.0f, y1 = 5.0f, z1 = 10.0f;
-//inline float x2 = 10.0f, y2 = 5.0f, z2 = 10.0f;
-//inline float x3 = 10.0f, y3 = -5.0f, z3 = 10.0f;
-//inline float x4 = -10.0f, y4 = -5.0f, z4 = 10.0f;
-//
-//// ========================
-//// BACK
-//// ========================
-//inline float x5 = 10.0f, y5 = 5.0f, z5 = -10.0f;
-//inline float x6 = -10.0f, y6 = 5.0f, z6 = -10.0f;
-//inline float x7 = -10.0f, y7 = -5.0f, z7 = -10.0f;
-//inline float x8 = 10.0f, y8 = -5.0f, z8 = -10.0f;
-//
-//// ========================
-//// LEFT
-//// ========================
-//inline float x9 = -10.0f, y9 = 5.0f, z9 = -10.0f;
-//inline float x10 = -10.0f, y10 = 5.0f, z10 = 10.0f;
-//inline float x11 = -10.0f, y11 = -5.0f, z11 = 10.0f;
-//inline float x12 = -10.0f, y12 = -5.0f, z12 = -10.0f;
-//
-//// ========================
-//// RIGHT
-//// ========================
-//inline float x13 = 10.0f, y13 = 5.0f, z13 = 10.0f;
-//inline float x14 = 10.0f, y14 = 5.0f, z14 = -10.0f;
-//inline float x15 = 10.0f, y15 = -5.0f, z15 = -10.0f;
-//inline float x16 = 10.0f, y16 = -5.0f, z16 = 10.0f;
-//
-//// ========================
-//// TOP
-//// ========================
-//inline float x17 = -10.0f, y17 = 5.0f, z17 = -10.0f;
-//inline float x18 = 10.0f, y18 = 5.0f, z18 = -10.0f;
-//inline float x19 = 10.0f, y19 = 5.0f, z19 = 10.0f;
-//inline float x20 = -10.0f, y20 = 5.0f, z20 = 10.0f;
-//
-//// ========================
-//// BOTTOM
-//// ========================
-//inline float x21 = -10.0f, y21 = -5.0f, z21 = 10.0f;
-//inline float x22 = 10.0f, y22 = -5.0f, z22 = 10.0f;
-//inline float x23 = 10.0f, y23 = -5.0f, z23 = -10.0f;
-//inline float x24 = -10.0f, y24 = -5.0f, z24 = -10.0f;
+struct cube {
+	float x, y, z;
+	float r, g, b;
+	float sizex, sizey, sizez;
+	float rotx, roty;
+};
+struct sphere {
+	float x, y, z, r, g, b, size;
+};
+std::vector<sphere> joint;
+
+struct robot {
+	vector<float> x, y, z;
+	vector<float> torsoRX, torsoRY,headRX,headRY;
+	vector<float> leftshoulderRX, leftshoulderRY, rightshoulderRX, rightshoulderRY;
+	vector<float> leftelbowRX, leftelbowRY, rightelbowRX, rightelbowRY;
+	vector<float> leftquadRX, leftquadRY, rightquadRX, rightquadRY;
+	vector<float> leftkneeRX, leftkneeRY, rightkneeRX, rightkneeRY;
+
+
+
+};
+robot robodata;
 
 void rot(float& x, float& y, float& z,
 	float rotationX, float rotationY)
@@ -70,7 +51,6 @@ void rot(float& x, float& y, float& z,
 	x = x1;
 	z = z2;
 }
-
 void rotate(quadVertex3d& face, float rotx,float roty) {
 
 	rot(face.x1, face.y1, face.z1, rotx, roty);
@@ -96,9 +76,42 @@ void addpos(quadVertex3d& face, float x, float y, float z) {
 	face.y4 += y;
 	face.z4 += z;
 }
+void resetrobot(robot& r)
+{
+	r.x.resize(1, 0.0f);
+	r.y.resize(1, 30.0f);
+	r.z.resize(1, 0.0f);
 
-void getcube(std::vector<quadVertex3d> &data,float x,float y,float z, float sizex,float sizey,float sizez,float r,float g,float b,float rotx,float roty,bool sidepivot) {
-	data.clear();
+	r.torsoRX.resize(1, 0.0f);
+	r.torsoRY.resize(1, 0.0f);
+	r.headRX.resize(1, 0.0f);
+	r.headRY.resize(1, 0.0f);
+
+	r.leftshoulderRX.resize(1, 0.0f);
+	r.leftshoulderRY.resize(1, 0.0f);
+	r.rightshoulderRX.resize(1, 0.0f);
+	r.rightshoulderRY.resize(1, 0.0f);
+
+	r.leftelbowRX.resize(1, 0.0f);
+	r.leftelbowRY.resize(1, 0.0f);
+	r.rightelbowRX.resize(1, 0.0f);
+	r.rightelbowRY.resize(1, 0.0f);
+
+	r.leftquadRX.resize(1, 0.0f);
+	r.leftquadRY.resize(1, 0.0f);
+	r.rightquadRX.resize(1, 0.0f);
+	r.rightquadRY.resize(1, 0.0f);
+
+	r.leftkneeRX.resize(1, 0.0f);
+	r.leftkneeRY.resize(1, 0.0f);
+	r.rightkneeRX.resize(1, 0.0f);
+	r.rightkneeRY.resize(1, 0.0f);
+}
+
+void getcube(vector<quadVertex3d> &Data,int i,float x,float y,float z, float sizex,float sizey,float sizez,float r,float g,float b,float rotx,float roty,bool sidepivot) {
+	
+	
+
 
 		quadVertex3d f1;
 		quadVertex3d f2;
@@ -106,6 +119,7 @@ void getcube(std::vector<quadVertex3d> &data,float x,float y,float z, float size
 		quadVertex3d f5;
 		quadVertex3d f6;
 		quadVertex3d f4;
+
 
         sizex = sizex / 2;
         sizey = sizey / 2;
@@ -253,6 +267,8 @@ void getcube(std::vector<quadVertex3d> &data,float x,float y,float z, float size
 	rotate(f5, rotx, roty);
 	rotate(f6, rotx, roty);
 
+
+
 	addpos(f1, x, y, z);
 	addpos(f2, x, y, z);
 	addpos(f3, x, y, z);
@@ -261,19 +277,123 @@ void getcube(std::vector<quadVertex3d> &data,float x,float y,float z, float size
 	addpos(f6, x, y, z);
 
 
-	data.push_back(f1);
-	data.push_back(f2);
-	data.push_back(f3);
-	data.push_back(f4);
-	data.push_back(f5);
-	data.push_back(f6);
+	Data[i]=f1;
+	Data[i+1]=f2;
+	Data[i+2]=f3;
+	Data[i+3]=f4;
+	Data[i+4]=f5;
+	Data[i+5]=f6;
+}
+void getrobot(int n,vector<quadVertex3d>& Data,robot& robodata) {
+	
+	for (int k=0; k < n; k++) {
+
+
+		float x = robodata.x[k];
+		float y = robodata.y[k];
+		float z = robodata.z[k];
+		
+
+		float sizex = 10.0f*scale;
+		float sizey = 20.0f*scale;
+		float sizez = 5.0f*scale;
+		
+
+		robot h = robodata;
+		
+
+		int i = k*60;
+		//torso
+
+		getcube(Data,i ,x, y, z, sizex, sizey, sizez, r, g, b, robodata.torsoRX[k], robodata.torsoRY[k], false);
+
+		//head
+		float head_size_x = sizex * 0.5f;
+		float head_size_y = sizey * 0.25f;
+		float head_size_z = sizez;
+
+		float head_x = x;
+		float head_y = y + (sizey * 0.625f);
+		float head_z = z;
+
+		getcube(Data,i+6, head_x, head_y, head_z, head_size_x, head_size_y, head_size_z, r, g, b, h.headRX[k], h.headRY[k], false);
+		//shoulder
+		float shoulder_size_x = sizex * 0.2f;;
+		float shoulder_size_y = sizey * 0.5f;
+		float shoulder_size_z = sizez * 0.8f;
+
+		float shoulder_x = x + (sizex * 0.6f);
+		float shoulder_y = y + (sizey * 0.5f);
+		float shoulder_z = z + (sizez * 0.2f);
+
+		//left
+		getcube(Data,i+12, -shoulder_x, shoulder_y, shoulder_z, shoulder_size_x, shoulder_size_y, shoulder_size_z, r, g, b, h.leftshoulderRX[k], h.leftshoulderRY[k], true);
+		//right
+		getcube(Data,i+18, shoulder_x, shoulder_y, shoulder_z, shoulder_size_x, shoulder_size_y, shoulder_size_z, r, g, b, h.rightshoulderRX[k], h.rightshoulderRY[k], true);
+		//elbow
+		float elbow_size_x = sizex * 0.2f;
+		float elbow_size_y = sizey * 0.5f;
+		float elbow_size_z = sizez * 0.8f;
+
+		float elbow_x = x + (sizex * 0.6f);
+		float elbow_y = y;
+		float elbow_z = z + (sizez * 0.2f);
+
+		//left
+		getcube(Data,i+24, -elbow_x, elbow_y, elbow_z, elbow_size_x, elbow_size_y, elbow_size_z, r, g, b, h.leftelbowRX[k], h.leftelbowRY[k], true);
+		//right
+		getcube(Data,i+30, elbow_x, elbow_y, elbow_z, elbow_size_x, elbow_size_y, elbow_size_z, r, g, b, h.rightelbowRX[k], h.rightelbowRY[k], true);
+
+		//upperlegs
+		float legs_size_x = sizex * 0.2f;
+		float legs_size_y = sizey * 0.5f;
+		float legs_size_z = sizez * 0.8f;
+
+		float legs_x = x + (sizex * 0.3f);
+		float legs_y = y - (sizey * 0.5f);
+		float legs_z = z + (sizez * 0.2f);
+
+		//left
+		getcube(Data,i+36, -legs_x, legs_y, legs_z, legs_size_x, legs_size_y, legs_size_z, r, g, b, h.leftquadRX[k], h.leftquadRY[k], true);
+		//right
+		getcube(Data,i+42, legs_x, legs_y, legs_z, legs_size_x, legs_size_y, legs_size_z, r, g, b, h.rightquadRX[k], h.rightquadRY[k], true);
+
+		//lowerlegs
+
+		float lowerlegs_size_x = sizex * 0.2f;
+		float lowerlegs_size_y = sizey * 0.5f;
+		float lowerlegs_size_z = sizez * 0.8f;
+
+		float lowerlegs_x = x + (sizex * 0.3f);
+		float lowerlegs_y = y - sizey;
+		float lowerlegs_z = z + (sizez * 0.2f);
+
+		//left
+		getcube(Data,i+48 ,-lowerlegs_x, lowerlegs_y, lowerlegs_z, lowerlegs_size_x, lowerlegs_size_y, lowerlegs_size_z, r, g, b, h.leftkneeRX[k], h.leftkneeRY[k], true);
+		//right
+		getcube(Data,i+54, lowerlegs_x, lowerlegs_y, lowerlegs_z, lowerlegs_size_x, lowerlegs_size_y, lowerlegs_size_z, r, g, b, h.rightkneeRX[k], h.rightkneeRY[k], true);
+	}
+
+
+}
+void initrobot() {
+	resetrobot(robodata);
+	getrobot(1,renderdata,robodata);
+	
 }
 
-void initrobot() {
-	getcube(data,x,y,z,sizex,sizey,sizez,0.3f,0.2f,0.6f,rotx,roty,false);
+
+void updaterobot(std::vector<cube>& body) {
+	
 }
+
 
 void renderRobot() {
-	getcube(data, x, y, z, sizex,sizey, sizez, 0.4f, 0.8f, 0.6f, rotx, roty, sidepivot);
-	render.quad3DBatch(data);
+	
+	
+		
+		
+	getrobot(1,renderdata, robodata);
+	render.quad3DBatch(renderdata);
+	
 }
