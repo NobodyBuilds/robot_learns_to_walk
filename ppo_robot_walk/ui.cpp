@@ -12,10 +12,23 @@
 
 
 	float p[3] = {x,y,z};
-	float color[3] = {x,y,z};
-	float s[3] = {sizex,sizey,sizez};
-	float rot[2] = {rotx,roty};
+	float color[3] = {r,g,b};
 	
+	float h_torso[2] = { 0.0f, 0.0f };
+	float h_head[2] = { 0.0f, 0.0f };
+
+	float h_leftshoul[2] = { 0.0f, 0.0f };
+	float h_rightshoul[2] = { 0.0f, 0.0f };
+
+	float h_leftelbow[2] = { 0.0f, 0.0f };
+	float h_rightelbow[2] = { 0.0f, 0.0f };
+
+	float h_leftupleg[2] = { 0.0f, 0.0f };
+	float h_rightupleg[2] = { 0.0f, 0.0f };
+
+	float h_leftknee[2] = { 0.0f, 0.0f };
+	float h_rightknee[2] = { 0.0f, 0.0f };
+
 void renderUI() {
 	//static std::vector<float> learningCurve;
 	//static float lastLoss = 0.0f;
@@ -31,35 +44,68 @@ void renderUI() {
 	ImGui::NewFrame();
 	//bool sync = false;
 	ImGui::Begin("debug");
+	ImGui::Text("fps: %3f  time: %3f", avgFps, timer);
 	
 	ImGui::DragFloat3("pos", p,0.1f,-1000.0f,1000.0f);
-	ImGui::DragFloat3("size", s, 0.1f, 1.0f, 999.0f);
-	ImGui::DragFloat2("rot", rot, 0.10f, -360.0f, 360.0f);
+
 	ImGui::DragFloat3("color", color, 0.005f, -0.0f, 1.0f);
-	ImGui::Checkbox("side pivot", &sidepivot);
+	ImGui::DragFloat("scale", &scale, 0.01f, 0.1f, 10.0f);
+	
+	ImGui::DragFloat2("Torso", h_torso, 0.1f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Head", h_head, 0.1f, -360.0f, 360.0f);
+
+	ImGui::DragFloat2("Left Shoulder", h_leftshoul, 0.1f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Right Shoulder", h_rightshoul, 0.1f, -360.0f, 360.0f);
+
+	ImGui::DragFloat2("Left Elbow", h_leftelbow, 0.1f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Right Elbow", h_rightelbow, 0.1f, -360.0f, 360.0f);
+
+	ImGui::DragFloat2("Left Upper Leg", h_leftupleg, 0.1f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Right Upper Leg", h_rightupleg, 0.1f, -360.0f, 360.0f);
+
+	ImGui::DragFloat2("Left Knee", h_leftknee, 0.1f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Right Knee", h_rightknee, 0.1f, -360.0f, 360.0f);
 	
 
-	if (ImGui::Button("add cube")) {
-		addpart();
-		
-	}
+	
 	x = p[0];
 	y = p[1];
 	z = p[2];
 
-	sizex = s[0];
-	sizey = s[1];
-	sizez = s[2];
-
-	rotx = rot[0];
-	roty = rot[1];
-
+	
 	r = color[0];
 	g = color[1];
 	b = color[2];
-	
+	h_tosorx = h_torso[0];
+	h_tosory = h_torso[1];
 
-	//ImGui::Text("fps: %3f  time: %3f", avgFps, timer);
+	h_headx = h_head[0];
+	h_heady = h_head[1];
+
+	h_leftshoulx = h_leftshoul[0];
+	h_leftshouly = h_leftshoul[1];
+
+	h_rightshoulx = h_rightshoul[0];
+	h_rightshouly = h_rightshoul[1];
+
+	h_leftelbowx = h_leftelbow[0];
+	h_leftelbowy = h_leftelbow[1];
+
+	h_rightelbowx = h_rightelbow[0];
+	h_rightelbowy = h_rightelbow[1];
+
+	h_leftuplegx = h_leftupleg[0];
+	h_leftuplegy = h_leftupleg[1];
+
+	h_rightuplegx = h_rightupleg[0];
+	h_rightuplegy = h_rightupleg[1];
+
+	h_leftkneex = h_leftknee[0];
+	h_leftkneey = h_leftknee[1];
+
+	h_rightkneex = h_rightknee[0];
+	h_rightkneey = h_rightknee[1];
+
 	//
 	//ImGui::Text("Gen: %d  rollout gen %d  buffer %d / %d  time:%f", gen, rolloutstep, step * robot_count, replaybuffersize, rollout_time);
 	//ImGui::Text("mse: %5f prev %5f ", mloss, oldmloss);

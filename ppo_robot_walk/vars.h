@@ -234,11 +234,59 @@ inline float torsotouching = -0.0f;
 
 
 inline float x = 0.0f;
-inline float y = 0.0f;
+inline float y = 35.0f;
 inline float z = 0.0f;
 inline float scale = 1.0f;
-inline float r=1.0f;
-inline float g=1.0f;
-inline float b=1.0f;
+inline float r=0.10f;
+inline float g=0.40f;
+inline float b=0.80f;
 
-float h_toso
+inline float h_tosorx;
+inline float h_tosory;
+inline float h_headx;
+inline float h_heady;
+inline float h_leftshoulx;
+inline float h_leftshouly;
+inline float h_rightshoulx;
+inline float h_rightshouly;
+inline float h_leftelbowx;
+inline float h_leftelbowy;
+inline float h_rightelbowx;
+inline float h_rightelbowy;
+inline float h_leftuplegx;
+inline float h_leftuplegy;
+inline float h_rightuplegx;
+inline float h_rightuplegy;
+inline float h_leftkneex;
+inline float h_leftkneey;
+inline float h_rightkneex;
+inline float h_rightkneey;
+
+inline __device__ float d_x = 0.0f;
+inline __device__ float d_y = 35.0f;
+inline __device__ float d_z = 0.0f;
+inline __device__ float d_scale = 1.0f;
+inline __device__ float d_r=0.10f;
+inline __device__ float d_g=0.40f;
+inline __device__ float d_b=0.80f;
+
+inline __device__ float d_tosorx;
+inline __device__ float d_tosory;
+inline __device__ float d_headx;
+inline __device__ float d_heady;
+inline __device__ float d_leftshoulx;
+inline __device__ float d_leftshouly;
+inline __device__ float d_rightshoulx;
+inline __device__ float d_rightshouly;
+inline __device__ float d_leftelbowx;
+inline __device__ float d_leftelbowy;
+inline __device__ float d_rightelbowx;
+inline __device__ float d_rightelbowy;
+inline __device__ float d_leftuplegx;
+inline __device__ float d_leftuplegy;
+inline __device__ float d_rightuplegx;
+inline __device__ float d_rightuplegy;
+inline __device__ float d_leftkneex;
+inline __device__ float d_leftkneey;
+inline __device__ float d_rightkneex;
+inline __device__ float d_rightkneey;

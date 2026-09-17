@@ -1202,7 +1202,7 @@ void initnetwork() {
 	allocate();
 	setmaxdisttotarget();
 
-
+	printf("network init complete \n");
 
 }
 void cudafree() {

@@ -44,9 +44,11 @@ int main()
 		else {
 			//updaterobot();
 		}
+
 		timer += dt;
 		renderfloor();
 		render.sprite3D(target, targetx, 0.5f, targetz, targetradious, trx, Try);
+
 		renderRobot();
 		renderUI();
 
@@ -69,6 +71,7 @@ int main()
 			fpsCount = 0;
 		}
 	}
+
 	save_weights();
 	noRender.closeWindow();
 	ImGui_ImplOpenGL3_Shutdown();
