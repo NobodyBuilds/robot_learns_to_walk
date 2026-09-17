@@ -46,25 +46,28 @@ void renderUI() {
 	ImGui::Begin("debug");
 	ImGui::Text("fps: %3f  time: %3f", avgFps, timer);
 	
+	if (ImGui::InputInt("num robots", &sample_robot_count, 1, 100)) {
+		restart();
+	}
 	ImGui::DragFloat3("pos", p,0.1f,-1000.0f,1000.0f);
 
 	ImGui::DragFloat3("color", color, 0.005f, -0.0f, 1.0f);
-	ImGui::DragFloat("scale", &scale, 0.01f, 0.1f, 10.0f);
 	
-	ImGui::DragFloat2("Torso", h_torso, 0.1f, -360.0f, 360.0f);
-	ImGui::DragFloat2("Head", h_head, 0.1f, -360.0f, 360.0f);
+	
+	ImGui::DragFloat2("Torso", h_torso, 0.005f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Head", h_head, 0.005f, -360.0f, 360.0f);
 
-	ImGui::DragFloat2("Left Shoulder", h_leftshoul, 0.1f, -360.0f, 360.0f);
-	ImGui::DragFloat2("Right Shoulder", h_rightshoul, 0.1f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Left Shoulder", h_leftshoul, 0.005f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Right Shoulder", h_rightshoul, 0.005f, -360.0f, 360.0f);
 
-	ImGui::DragFloat2("Left Elbow", h_leftelbow, 0.1f, -360.0f, 360.0f);
-	ImGui::DragFloat2("Right Elbow", h_rightelbow, 0.1f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Left Elbow", h_leftelbow, 0.005f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Right Elbow", h_rightelbow, 0.005f, -360.0f, 360.0f);
 
-	ImGui::DragFloat2("Left Upper Leg", h_leftupleg, 0.1f, -360.0f, 360.0f);
-	ImGui::DragFloat2("Right Upper Leg", h_rightupleg, 0.1f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Left Upper Leg", h_leftupleg, 0.005f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Right Upper Leg", h_rightupleg, 0.005f, -360.0f, 360.0f);
 
-	ImGui::DragFloat2("Left Knee", h_leftknee, 0.1f, -360.0f, 360.0f);
-	ImGui::DragFloat2("Right Knee", h_rightknee, 0.1f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Left Knee", h_leftknee, 0.005f, -360.0f, 360.0f);
+	ImGui::DragFloat2("Right Knee", h_rightknee, 0.005f, -360.0f, 360.0f);
 	
 
 	
@@ -130,9 +133,6 @@ void renderUI() {
 	//ImGui::DragFloat("roty", &roty, 0.1f);
 
 
-	//if (ImGui::InputInt("num robots", &sample_robot_count, 1, 100)) {
-	//	restart();
-	//}
 
 	/*ImGui::Checkbox("run ai", &run_ai);
 	if (run_ai) { ImGui::Checkbox("training", &training); }

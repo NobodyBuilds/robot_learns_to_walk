@@ -78,6 +78,8 @@ int main()
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
 	cudafree();
-	
+#if usecuda
+	freedevmem();
+#endif
 	return 0;
 }

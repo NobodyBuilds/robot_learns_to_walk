@@ -317,9 +317,7 @@ __device__ void solvelayers(int n, int ci, int nin, int w, int d, int b, int p, 
 __device__ float dslope(float x) {
 	return x > 0.f ? 1.f : 0.01f;
 }
-__device__ float clamp(float val, float min, float max) {
-	return fminf(fmaxf(val, min), max);
-}
+
 __device__ float get_lClip(replaybuffer* buffer, int s) {
 
 
@@ -1164,7 +1162,9 @@ void copywbtogpu() {
 }
 void restart() {
 	save_weights();
-	
+#if usecuda
+	freedevmem();
+#endif
 	cudafree();
 
 	printf("memfree on restart \n");

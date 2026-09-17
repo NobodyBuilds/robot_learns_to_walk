@@ -3,7 +3,10 @@
 #include <cuda_runtime.h>
 #include "render.h"
 #include "norender.h"
-
+#define usecuda true
+#define usecpu false
+#define network true
+#define PI 3.14159265359f
 inline int threads = 256;
 
 //floor variables
@@ -21,8 +24,9 @@ inline float floorRotationY = 0.0f;
 /////
 //robot variables
 // Number of independent robot instances in the environment.
-inline int robot_count = 1;
-inline int sample_robot_count = 1;
+inline int robot_count =2;
+inline int sample_robot_count = 2;
+
 struct body {
 	float positonX = 0.0f;
 	float positionY = 0.0f;
@@ -81,7 +85,9 @@ struct body {
 };
 
 
-
+inline __device__ float clamp(float val, float min, float max) {
+	return fminf(fmaxf(val, min), max);
+}
 
 inline __device__ float gravity = -9.8f;
 inline __device__ float friction = 0.9f;
@@ -129,7 +135,7 @@ inline float h_robotScale = 1.0f;
 
 /////
 //env
-
+#if network
 inline float targetx = 246;
 inline float targetz = 250.0f;
 inline float targetradious = 46.0f;
@@ -186,7 +192,6 @@ struct Layer {
 
 };
 
-
 //ppo
 inline int replaybuffersize = robot_count * 2048;
 inline int gen = 0;
@@ -213,9 +218,8 @@ inline float2* actor_adam_weights = nullptr;//x== m,y==v
 inline float2* actor_adam_bias = nullptr;//x== m,y==v
 inline float2* critic_adam_weights = nullptr;
 inline float2* critic_adam_bias = nullptr;
-
-
 inline std::vector<int> shuffled_indices;
+#endif
 
 
 inline int blocks(int n) {
@@ -234,7 +238,7 @@ inline float torsotouching = -0.0f;
 
 
 inline float x = 0.0f;
-inline float y = 35.0f;
+inline float y = 15.0f;
 inline float z = 0.0f;
 inline float scale = 1.0f;
 inline float r=0.10f;
@@ -263,7 +267,7 @@ inline float h_rightkneex;
 inline float h_rightkneey;
 
 inline __device__ float d_x = 0.0f;
-inline __device__ float d_y = 35.0f;
+inline __device__ float d_y = 15.0f;
 inline __device__ float d_z = 0.0f;
 inline __device__ float d_scale = 1.0f;
 inline __device__ float d_r=0.10f;

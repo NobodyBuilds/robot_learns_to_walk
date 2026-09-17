@@ -10,22 +10,16 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 using namespace std;
-#define usecuda true
-#define usecpu false
-std::vector<quadVertex3d>renderdata;
+
 
 cudaError_t err;
-struct cube {
-	float x, y, z;
-	float r, g, b;
-	float sizex, sizey, sizez;
-	float rotx, roty;
-};
-struct sphere {
-	float x, y, z, r, g, b, size;
-};
-std::vector<sphere> joint;
 
+
+
+
+#if usecpu
+
+std::vector<quadVertex3d>renderdata;
 struct robot {
 	vector<float> x, y, z;
 	vector<float> torsoRX, torsoRY,headRX,headRY;
@@ -37,22 +31,10 @@ struct robot {
 
 
 };
-
-struct d_robot {
-	float3* pos;
-	float4* torsohead;//tx,ty,hx,hy
-	float4* shoulders;//lsx,lsy,rsx,rsy
-	float4* elbow;//lex,ley,rex,rey
-	float4* quad;//lqx,lqy,rqx,rqy
-	float4* knee;//lkx,lky,rkx,rky
-};
-
 robot robodata;
 
-d_robot d_robodata;
 
-quadVertex3d* d_renderdata = nullptr;
-#if usecpu
+
 void rot(float& x, float& y, float& z,
 	float rotationX, float rotationY)
 {
@@ -454,7 +436,22 @@ void getrobot(int n,vector<quadVertex3d>& Data,robot& robodata) {
 
 }
 #endif
+
 #if usecuda
+
+struct d_robot {
+	float3* pos;//x,y,z
+	float3* col;//r,b,g
+	float4* torsohead;//tx,ty,hx,hy
+	float4* shoulders;//lsx,lsy,rsx,rsy
+	float4* elbow;//lex,ley,rex,rey
+	float4* quad;//lqx,lqy,rqx,rqy
+	float4* knee;//lkx,lky,rkx,rky
+};
+
+d_robot d_robodata;
+quadVertex3d* d_renderdata = nullptr;
+
 static cudaGraphicsResource_t robotvbo = nullptr;
 void registervbo(int n) {
 	unsigned int vboid = vbo_id.quad3d_instanced_vbo(n*60, 1);
@@ -469,10 +466,11 @@ void registervbo(int n) {
 	geterror("glregister", err);
 };
 
-//perf indicator: 1 robot on cpu rendering give ~185fps max;
+
 void allocatedevmem(int n) {
 
 	cudaMalloc(&d_robodata.pos, n * sizeof(float3));
+	cudaMalloc(&d_robodata.col, n * sizeof(float3));
 	
 	cudaMalloc(&d_robodata.shoulders, n * sizeof(float4));
 	cudaMalloc(&d_robodata.elbow, n * sizeof(float4));
@@ -485,11 +483,24 @@ void allocatedevmem(int n) {
 	
 
 }
+void freedevmem() {
+	cudaFree(d_robodata.pos);
+	cudaFree(d_robodata.col);
+
+	cudaFree(d_robodata.shoulders);
+	cudaFree(d_robodata.elbow);
+	cudaFree(d_robodata.quad);
+	cudaFree(d_robodata.knee);
+	cudaFree(d_robodata.torsohead);
+
+	cudaFree(d_renderdata);
+}
 
 __global__ void resetrobodata(int n,d_robot data){
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
-	data.pos[i] = {0.0f,30.0f,0.0f};
+	data.pos[i] = {0.0f,15.0f,0.0f};
+	data.col[i] = {0.3f,0.4f,0.6f};
 	data.shoulders[i] = { 0 };
 	data.elbow[i] = { 0 };
 	data.knee[i] = { 0 };
@@ -537,9 +548,15 @@ __device__ void d_addpos(quadVertex3d& face, float x, float y, float z) {
 	face.y4 += y;
 	face.z4 += z;
 }
+__device__ float radclamp(float rad, float min, float max) {
+	float minr = min * (PI / 180.0f);
+	float maxr = max * (PI / 180.0f);
+	return  clamp(rad, minr, maxr);
+	
+}
 __device__ float3 d_getangpos(float rotx, float roty, float length, float3 pos) {
-	float rx = rotx * 3.14159265f / 180.0f;
-	float ry = roty * 3.14159265f / 180.0f;
+	float rx = rotx ;
+	float ry = roty;
 
 	float dx = 0.0f;
 	float dy = -1.0f;
@@ -710,7 +727,8 @@ __device__ void d_getcube(quadVertex3d* Data,int i,float x,float y,float z, floa
             f6.g = g * 0.4f;
             f6.b = b * 0.4f;
         }
-
+		rotx = rotx * (180.0f / PI);
+		roty = roty * (180.0f / PI);
 
 	d_rotate(f1, rotx, roty);
 	d_rotate(f2, rotx, roty);
@@ -736,28 +754,106 @@ __device__ void d_getcube(quadVertex3d* Data,int i,float x,float y,float z, floa
 	Data[i+4]=f5;
 	Data[i+5]=f6;
 }
-__global__ void d_getrobot(int n, quadVertex3d* Data, d_robot robodata) {
-
+__global__ void d_getrobot(int n, quadVertex3d* Data, d_robot robodata,bool init) {
 	int k = blockIdx.x * blockDim.x + threadIdx.x;
 	if (k >= n)return;
+	float x, y, z;
+	if(init) {
+		float spacing = 20.0f;
+		int j = ceilf((sqrtf((float)k + 1.0f) - 1.0f) / 2.0f);
 
-	float x = robodata.pos[k].x;
-	float y = robodata.pos[k].y;
-	float z = robodata.pos[k].z;
+		int t = 2 * j + 1;
+		int m = t * t;
+
+		int px, py;
+
+		int d = m - k;
+
+		if (d < t)
+		{
+			px = j - d;
+			py = j;
+		}
+		else if (d < 2 * t)
+		{
+			px = -j;
+			py = j - (d - t);
+		}
+		else if (d < 3 * t)
+		{
+			px = -j + (d - 2 * t);
+			py = -j;
+		}
+		else
+		{
+			px = j;
+			py = -j + (d - 3 * t);
+		}
+
+		x = px * spacing;
+		z = py * spacing;
+		y = 15.0f;
+		robodata.pos[k].x=x;
+		robodata.pos[k].y=y;
+		robodata.pos[k].z=z;
+	}
+	else {
+
+		x = robodata.pos[k].x;
+		y = robodata.pos[k].y;
+		z = robodata.pos[k].z;
+	}
 
 
-	float sizex = 10.0f * d_scale;
-	float sizey = 20.0f * d_scale;
-	float sizez = 5.0f * d_scale;
 
-	float r = d_r;
-	float g = d_g;
-	float b = d_b;
+
+	float sizex = 10.0f * 0.5f;
+	float sizey = 20.0f * 0.5f;
+	float sizez = 5.0f * 0.5f;
+
+	// Body part color palette (left and right parts share the same colors)
+	float torso_r = d_r,   torso_g = d_g,   torso_b = d_b;   // Torso (customizable via UI)
+	float head_r  = 0.95f, head_g  = 0.75f, head_b  = 0.15f; // Head (bright amber/gold)
+
+	// Arms (identical color for both Left and Right arms)
+	float arm_upper_r = 0.95f, arm_upper_g = 0.45f, arm_upper_b = 0.20f; // Shoulders / upper arms (coral)
+	float arm_lower_r = 0.85f, arm_lower_g = 0.35f, arm_lower_b = 0.15f; // Forearms / elbows (terracotta)
+
+	// Legs (identical color for both Left and Right legs)
+	float leg_upper_r = 0.20f, leg_upper_g = 0.75f, leg_upper_b = 0.40f; // Thighs / upper legs (emerald green)
+	float leg_lower_r = 0.12f, leg_lower_g = 0.60f, leg_lower_b = 0.35f; // Shins / lower legs (forest jade)
+
 	d_robot h = robodata;
+	
+	h.torsohead[k].z = radclamp(h.torsohead[k].z, -20.0f, 15.0f);
+	h.torsohead[k].w = radclamp(h.torsohead[k].w, -75.0f, 75.0f);
+
+	h.shoulders[k].x = radclamp(h.shoulders[k].x, -180.0f, 30.0f);
+	h.shoulders[k].y = radclamp(h.shoulders[k].y, -95.0f, 60.0f);
+	h.shoulders[k].z = radclamp(h.shoulders[k].z, -180.0f, 30.0f);
+	h.shoulders[k].w = radclamp(h.shoulders[k].w, -95.0f, 60.0f);
+
+	h.elbow[k].x = radclamp(h.elbow[k].x, -160.0f, 0.0f);
+	h.elbow[k].y = radclamp(h.elbow[k].y, -30.0f, 40.0f);
+	h.elbow[k].z = radclamp(h.elbow[k].z, -160.0f, 0.0f);
+	h.elbow[k].w = radclamp(h.elbow[k].w, -30.0f, 40.0f);
+
+	h.quad[k].x = radclamp(h.quad[k].x, -95.0f, 60.0f);
+	h.quad[k].y = radclamp(h.quad[k].y, -20.0f, 50.0f);
+	h.quad[k].z = radclamp(h.quad[k].z, -95.0f, 60.0f);
+	h.quad[k].w = radclamp(h.quad[k].w, -20.0f, 50.0f);
+
+	h.knee[k].x = radclamp(h.knee[k].x, 0.0f, 120.0f);
+	h.knee[k].y = 0.0f;
+	h.knee[k].z = radclamp(h.knee[k].z, 0.0f, 120.0f);
+	h.knee[k].w = 0.0f;
+
+
+
 
 	int i = k * 60;
 	//torso
-	d_getcube(Data, i, x, y, z, sizex, sizey, sizez, r, g, b, robodata.torsohead[k].x, robodata.torsohead[k].y, false);
+	d_getcube(Data, i, x, y, z, sizex, sizey, sizez, torso_r, torso_g, torso_b, robodata.torsohead[k].x, robodata.torsohead[k].y, false);
 	//head
 	float head_size_x = sizex * 0.5f;
 	float head_size_y = sizey * 0.25f;
@@ -766,12 +862,14 @@ __global__ void d_getrobot(int n, quadVertex3d* Data, d_robot robodata) {
 	float head_off_x = 0.0f;
 	float head_off_y = sizey * 0.625f;
 	float head_off_z = 0.0f;
-	d_rot(head_off_x, head_off_y, head_off_z, h.torsohead[k].z, h.torsohead[k].w);
+	d_rot(head_off_x, head_off_y, head_off_z, h.torsohead[k].x, h.torsohead[k].y);
 	float head_x = x + head_off_x;
 	float head_y = y + head_off_y;
 	float head_z = z + head_off_z;
+	float headrx = h.torsohead[k].z + h.torsohead[k].x;
+	float headry = h.torsohead[k].w + h.torsohead[k].y;	
 
-	d_getcube(Data, i + 6, head_x, head_y, head_z, head_size_x, head_size_y, head_size_z, r, g, b, h.torsohead[k].z + h.torsohead[k].x, h.torsohead[k].w + h.torsohead[k].y, false);
+	d_getcube(Data, i + 6, head_x, head_y, head_z, head_size_x, head_size_y, head_size_z, head_r, head_g, head_b,headrx ,headry , false);
 	//shoulder
 	float shoulder_size_x = sizex * 0.2f;
 	float shoulder_size_y = sizey * 0.5f;
@@ -796,10 +894,10 @@ __global__ void d_getrobot(int n, quadVertex3d* Data, d_robot robodata) {
 	float rshoulder_y = y + rshoulder_off_y;
 	float rshoulder_z = z + rshoulder_off_z;
 
-	//left
-	d_getcube(Data, i + 12, lshoulder_x, lshoulder_y, lshoulder_z, shoulder_size_x, shoulder_size_y, shoulder_size_z, r, g, b, h.shoulders[k].x + h.torsohead[k].x, h.shoulders[k].y + h.torsohead[k].y, true);
-	//right
-	d_getcube(Data, i + 18, rshoulder_x, rshoulder_y, rshoulder_z, shoulder_size_x, shoulder_size_y, shoulder_size_z, r, g, b, h.shoulders[k].z + h.torsohead[k].x, h.shoulders[k].w + h.torsohead[k].y, true);
+	//left shoulder
+	d_getcube(Data, i + 12, lshoulder_x, lshoulder_y, lshoulder_z, shoulder_size_x, shoulder_size_y, shoulder_size_z, arm_upper_r, arm_upper_g, arm_upper_b, h.shoulders[k].x + h.torsohead[k].x, h.shoulders[k].y + h.torsohead[k].y, true);
+	//right shoulder
+	d_getcube(Data, i + 18, rshoulder_x, rshoulder_y, rshoulder_z, shoulder_size_x, shoulder_size_y, shoulder_size_z, arm_upper_r, arm_upper_g, arm_upper_b, h.shoulders[k].z + h.torsohead[k].x, h.shoulders[k].w + h.torsohead[k].y, true);
 	//elbow
 	float elbow_size_x = sizex * 0.2f;
 	float elbow_size_y = sizey * 0.5f;
@@ -811,66 +909,109 @@ __global__ void d_getrobot(int n, quadVertex3d* Data, d_robot robodata) {
 	float3 right_spos = make_float3(rshoulder_x, rshoulder_y, rshoulder_z);
 	float3 right_elbowpos = d_getangpos(h.shoulders[k].z + h.torsohead[k].x, h.shoulders[k].w + h.torsohead[k].y, shoulder_size_y, right_spos);
 
-	//left
-	d_getcube(Data, i + 24, left_elbowpos.x, left_elbowpos.y, left_elbowpos.z, elbow_size_x, elbow_size_y, elbow_size_z, r, g, b, h.elbow[k].x + h.shoulders[k].x + h.torsohead[k].x, h.elbow[k].y + h.shoulders[k].y + h.torsohead[k].y, true);
-		//right
-		d_getcube(Data,i+30, right_elbowpos.x, right_elbowpos.y, right_elbowpos.z, elbow_size_x, elbow_size_y, elbow_size_z, r, g, b, h.elbow[k].z + h.shoulders[k].z + h.torsohead[k].x, h.elbow[k].w + h.shoulders[k].w + h.torsohead[k].y, true);
-		//upperlegs
-		float legs_size_x = sizex * 0.2f;
-		float legs_size_y = sizey * 0.5f;
-		float legs_size_z = sizez * 0.8f;
+	//left elbow
+	d_getcube(Data, i + 24, left_elbowpos.x, left_elbowpos.y, left_elbowpos.z, elbow_size_x, elbow_size_y, elbow_size_z, arm_lower_r, arm_lower_g, arm_lower_b, h.elbow[k].x + h.shoulders[k].x + h.torsohead[k].x, h.elbow[k].y + h.shoulders[k].y + h.torsohead[k].y, true);
+	//right elbow
+	d_getcube(Data, i + 30, right_elbowpos.x, right_elbowpos.y, right_elbowpos.z, elbow_size_x, elbow_size_y, elbow_size_z, arm_lower_r, arm_lower_g, arm_lower_b, h.elbow[k].z + h.shoulders[k].z + h.torsohead[k].x, h.elbow[k].w + h.shoulders[k].w + h.torsohead[k].y, true);
+	//upperlegs
+	float legs_size_x = sizex * 0.2f;
+	float legs_size_y = sizey * 0.5f;
+	float legs_size_z = sizez * 0.8f;
 
-		// Leg offsets relative to torso center
-		float llegs_off_x = -(sizex * 0.3f);
-		float llegs_off_y = -(sizey * 0.5f);
-		float llegs_off_z = sizez * 0.2f;
-		d_rot(llegs_off_x, llegs_off_y, llegs_off_z, h.torsohead[k].x, h.torsohead[k].y);
+	// Leg offsets relative to torso center
+	float llegs_off_x = -(sizex * 0.3f);
+	float llegs_off_y = -(sizey * 0.5f);
+	float llegs_off_z = sizez * 0.2f;
+	d_rot(llegs_off_x, llegs_off_y, llegs_off_z, h.torsohead[k].x, h.torsohead[k].y);
 
-		float rlegs_off_x = sizex * 0.3f;
-		float rlegs_off_y = -(sizey * 0.5f);
-		float rlegs_off_z = sizez * 0.2f;
-		d_rot(rlegs_off_x, rlegs_off_y, rlegs_off_z, h.torsohead[k].x, h.torsohead[k].y);
+	float rlegs_off_x = sizex * 0.3f;
+	float rlegs_off_y = -(sizey * 0.5f);
+	float rlegs_off_z = sizez * 0.2f;
+	d_rot(rlegs_off_x, rlegs_off_y, rlegs_off_z, h.torsohead[k].x, h.torsohead[k].y);
 
-		float llegs_x = x + llegs_off_x;
-		float llegs_y = y + llegs_off_y;
-		float llegs_z = z + llegs_off_z;
+	float llegs_x = x + llegs_off_x;
+	float llegs_y = y + llegs_off_y;
+	float llegs_z = z + llegs_off_z;
 
-		float rlegs_x = x + rlegs_off_x;
-		float rlegs_y = y + rlegs_off_y;
-		float rlegs_z = z + rlegs_off_z;
+	float rlegs_x = x + rlegs_off_x;
+	float rlegs_y = y + rlegs_off_y;
+	float rlegs_z = z + rlegs_off_z;
 
-		//left
-		d_getcube(Data,i+36, llegs_x, llegs_y, llegs_z, legs_size_x, legs_size_y, legs_size_z, r, g, b, h.quad[k].x + h.torsohead[k].x, h.quad[k].y + h.torsohead[k].y, true);
-		//right
-		d_getcube(Data,i+42, rlegs_x, rlegs_y, rlegs_z, legs_size_x, legs_size_y, legs_size_z, r, g, b, h.quad[k].z + h.torsohead[k].x, h.quad[k].w + h.torsohead[k].y, true);
-		//lowerlegs
+	//left thigh
+	d_getcube(Data, i + 36, llegs_x, llegs_y, llegs_z, legs_size_x, legs_size_y, legs_size_z, leg_upper_r, leg_upper_g, leg_upper_b, h.quad[k].x + h.torsohead[k].x, h.quad[k].y + h.torsohead[k].y, true);
+	//right thigh
+	d_getcube(Data, i + 42, rlegs_x, rlegs_y, rlegs_z, legs_size_x, legs_size_y, legs_size_z, leg_upper_r, leg_upper_g, leg_upper_b, h.quad[k].z + h.torsohead[k].x, h.quad[k].w + h.torsohead[k].y, true);
+	//lowerlegs
 
-		float lowerlegs_size_x = sizex * 0.2f;
-		float lowerlegs_size_y = sizey * 0.5f;
-		float lowerlegs_size_z = sizez * 0.8f;
+	float lowerlegs_size_x = sizex * 0.2f;
+	float lowerlegs_size_y = sizey * 0.5f;
+	float lowerlegs_size_z = sizez * 0.8f;
 
-		float3 left_legpos = make_float3(llegs_x, llegs_y, llegs_z);
-		float3 left_kneepos = d_getangpos(h.quad[k].x + h.torsohead[k].x, h.quad[k].y + h.torsohead[k].y, legs_size_y, left_legpos);
+	float3 left_legpos = make_float3(llegs_x, llegs_y, llegs_z);
+	float3 left_kneepos = d_getangpos(h.quad[k].x + h.torsohead[k].x, h.quad[k].y + h.torsohead[k].y, legs_size_y, left_legpos);
 
-		float3 right_legpos = make_float3(rlegs_x, rlegs_y, rlegs_z);
-		float3 right_kneepos = d_getangpos(h.quad[k].z + h.torsohead[k].x, h.quad[k].w + h.torsohead[k].y, legs_size_y, right_legpos);
+	float3 right_legpos = make_float3(rlegs_x, rlegs_y, rlegs_z);
+	float3 right_kneepos = d_getangpos(h.quad[k].z + h.torsohead[k].x, h.quad[k].w + h.torsohead[k].y, legs_size_y, right_legpos);
 
-		//left
-		d_getcube(Data,i+48, left_kneepos.x, left_kneepos.y, left_kneepos.z, lowerlegs_size_x, lowerlegs_size_y, lowerlegs_size_z, r, g, b, h.knee[k].x + h.quad[k].x + h.torsohead[k].x, h.knee[k].y + h.quad[k].y + h.torsohead[k].y, true);
-		//right
-		d_getcube(Data,i+54, right_kneepos.x, right_kneepos.y, right_kneepos.z, lowerlegs_size_x, lowerlegs_size_y, lowerlegs_size_z, r, g, b, h.knee[k].z + h.quad[k].z + h.torsohead[k].x, h.knee[k].w + h.quad[k].w + h.torsohead[k].y, true);
+	//left shin/knee
+	d_getcube(Data, i + 48, left_kneepos.x, left_kneepos.y, left_kneepos.z, lowerlegs_size_x, lowerlegs_size_y, lowerlegs_size_z, leg_lower_r, leg_lower_g, leg_lower_b, h.knee[k].x + h.quad[k].x + h.torsohead[k].x, h.knee[k].y + h.quad[k].y + h.torsohead[k].y, true);
+	//right shin/knee
+	d_getcube(Data, i + 54, right_kneepos.x, right_kneepos.y, right_kneepos.z, lowerlegs_size_x, lowerlegs_size_y, lowerlegs_size_z, leg_lower_r, leg_lower_g, leg_lower_b, h.knee[k].z + h.quad[k].z + h.torsohead[k].x, h.knee[k].w + h.quad[k].w + h.torsohead[k].y, true);
 	
 
 
 }
+__global__ void getinputs(int n,d_robot data)
+{
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= n)return;
+
+	d_robot d = data;
+	d.col[i].x = d_r;
+	d.col[i].y = d_g;
+	d.col[i].z = d_b;
+	//d.pos[i].x = d_x;
+	//d.pos[i].y = d_y;
+	//d.pos[i].z = d_z;
+
+	d.torsohead[i].x = d_tosorx;
+	d.torsohead[i].y = d_tosory;
+	d.torsohead[i].z = d_headx;
+	d.torsohead[i].w = d_heady;
+
+	d.shoulders[i].x = d_leftshoulx;
+	d.shoulders[i].y = d_leftshouly;
+	d.shoulders[i].z = d_rightshoulx;
+	d.shoulders[i].w = d_rightshouly;
+
+	d.elbow[i].x = d_leftelbowx;
+	d.elbow[i].y = d_leftelbowy;
+	d.elbow[i].z = d_rightelbowx;
+	d.elbow[i].w = d_rightelbowy;
+
+	d.quad[i].x = d_leftuplegx;
+	d.quad[i].y = d_leftuplegy;
+	d.quad[i].z = d_rightuplegx;
+	d.quad[i].w = d_rightuplegy;
+
+	d.knee[i].x = d_leftkneex;
+	d.knee[i].y = d_leftkneey;
+	d.knee[i].z = d_rightkneex;
+	d.knee[i].w = d_rightkneey;
+}
+
+
 void uploaddata(int n) {
+
+
 	err =cudaGraphicsMapResources(1, &robotvbo, 0);
 	geterror("map res", err);
 	size_t bytes = 0;
 
 	err=cudaGraphicsResourceGetMappedPointer((void**)&d_renderdata, &bytes, robotvbo);
 	geterror("mapping", err);
-	d_getrobot << <blocks(n), threads >> > (n, d_renderdata, d_robodata);
+	getinputs<<<blocks(n), threads >> >(n,d_robodata);
+	d_getrobot << <blocks(n), threads >> > (n, d_renderdata, d_robodata,false);
 	err=cudaGraphicsUnmapResources(1, &robotvbo, 0);
 	geterror("unmapping", err);
 
@@ -886,10 +1027,10 @@ void initrobot() {
 	getrobot(1,renderdata,robodata);
 #endif
 #if usecuda
-	allocatedevmem(1);
-	registervbo(1);
-	resetrobodata << <blocks(1), threads >> > (1, d_robodata);
-	d_getrobot << <blocks(1), threads >> > (1, d_renderdata, d_robodata);
+	allocatedevmem(robot_count);
+	registervbo(robot_count);
+	resetrobodata << <blocks(robot_count), threads >> > (robot_count, d_robodata);
+	d_getrobot << <blocks(robot_count), threads >> > (robot_count, d_renderdata, d_robodata,true);
 #endif
 	printf("robot init complete \n");
 }
@@ -937,7 +1078,43 @@ void renderRobot() {
 #endif
 #if usecuda
 	
-	
-	uploaddata(1);
+	cudaMemcpyToSymbol(d_x, &x, sizeof(float));
+	cudaMemcpyToSymbol(d_y, &y, sizeof(float));
+	cudaMemcpyToSymbol(d_z, &z, sizeof(float));
+	cudaMemcpyToSymbol(d_scale, &scale, sizeof(float));
+	cudaMemcpyToSymbol(d_r, &r, sizeof(float));
+	cudaMemcpyToSymbol(d_g, &g, sizeof(float));
+	cudaMemcpyToSymbol(d_b, &b, sizeof(float));
+
+	cudaMemcpyToSymbol(d_tosorx, &h_tosorx, sizeof(float));
+	cudaMemcpyToSymbol(d_tosory, &h_tosory, sizeof(float));
+
+	cudaMemcpyToSymbol(d_headx, &h_headx, sizeof(float));
+	cudaMemcpyToSymbol(d_heady, &h_heady, sizeof(float));
+
+	cudaMemcpyToSymbol(d_leftshoulx, &h_leftshoulx, sizeof(float));
+	cudaMemcpyToSymbol(d_leftshouly, &h_leftshouly, sizeof(float));
+
+	cudaMemcpyToSymbol(d_rightshoulx, &h_rightshoulx, sizeof(float));
+	cudaMemcpyToSymbol(d_rightshouly, &h_rightshouly, sizeof(float));
+
+	cudaMemcpyToSymbol(d_leftelbowx, &h_leftelbowx, sizeof(float));
+	cudaMemcpyToSymbol(d_leftelbowy, &h_leftelbowy, sizeof(float));
+
+	cudaMemcpyToSymbol(d_rightelbowx, &h_rightelbowx, sizeof(float));
+	cudaMemcpyToSymbol(d_rightelbowy, &h_rightelbowy, sizeof(float));
+
+	cudaMemcpyToSymbol(d_leftuplegx, &h_leftuplegx, sizeof(float));
+	cudaMemcpyToSymbol(d_leftuplegy, &h_leftuplegy, sizeof(float));
+
+	cudaMemcpyToSymbol(d_rightuplegx, &h_rightuplegx, sizeof(float));
+	cudaMemcpyToSymbol(d_rightuplegy, &h_rightuplegy, sizeof(float));
+
+	cudaMemcpyToSymbol(d_leftkneex, &h_leftkneex, sizeof(float));
+	cudaMemcpyToSymbol(d_leftkneey, &h_leftkneey, sizeof(float));
+
+	cudaMemcpyToSymbol(d_rightkneex, &h_rightkneex, sizeof(float));
+	cudaMemcpyToSymbol(d_rightkneey, &h_rightkneey, sizeof(float));
+	uploaddata(robot_count);
 #endif
 }
