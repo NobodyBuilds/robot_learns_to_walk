@@ -63,19 +63,19 @@ __global__ void init_rng(curandState* state, int n, unsigned long seed) {
 void allocate() {
 	int n = robot_count;
 	cudaMalloc(&d_body, n * sizeof(body));
-	
+
 	cudaMalloc(&d_rngstate, robot_count * sizeof(curandState));
 	init_rng << <1, 1 >> > (d_rngstate, robot_count, 3476);
 	printf("data allocated \n");
 }
 void setmaxdisttotarget() {
-	float dx = 0.0f- targetx;
-	float dz = 0.0f- targetz;
+	float dx = 0.0f - targetx;
+	float dz = 0.0f - targetz;
 
 
 	maxdisttotarget = sqrtf(dx * dx + dz * dz);
 	setconst();
-	
+
 }
 
 //weights and netrwork
@@ -101,7 +101,7 @@ void addlayer(int in, int out, bool isactor) {
 		actor_layers++;
 		actor_weightbuffersize += (in * out);
 		actor_nodedatasize += out;
-		antitynodesize += out *robot_count;
+		antitynodesize += out * robot_count;
 		actor_biassize += out;
 	}
 	else {
@@ -474,28 +474,7 @@ __device__ float actionTarget(int j, float action) {
 	}
 	return lo + 0.5f * (action + 1.0f) * (hi - lo);
 }
-__device__ void setJointAction(body& b, int j, float value) {
-	switch (j) {
-	case 0: b.hipjoints = value; break;
-	case 1: b.hipJointSideways = value; break;
-	case 2: b.leftElbowJoint = value; break;
-	case 3: b.rightElbowJoint = value; break;
-	case 4: b.leftHipJointSideways = value; break;
-	case 5: b.rightHipJointSideways = value; break;
-	case 6: b.leftHipJointTwist = value; break;
-	case 7: b.rightHipJointTwist = value; break;
-	case 8: b.leftKneeJoint = value; break;
-	case 9: b.rightKneeJoint = value; break;
-	case 10: b.leftShoulderJoint = value; break;
-	case 11: b.rightShoulderJoint = value; break;
-	case 12: b.leftShoulderJointSideways = value; break;
-	case 13: b.rightShoulderJointSideways = value; break;
-	case 14: b.leftShoulderJointTwist = value; break;
-	case 15: b.rightShoulderJointTwist = value; break;
-	case 16: b.leftUpperLegJoint = value; break;
-	case 17: b.rightUpperLegJoint = value; break;
-	}
-}
+
 __device__ float tanhGaussianLogProb(float z, float action, float mean) {
 	float diff = z - mean;
 	return -0.5f * diff * diff / (ACTION_SIGMA * ACTION_SIGMA)
@@ -513,7 +492,6 @@ __device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* bu
 		float action = tanhf(z);
 		buffer[bidx].action[j] = action;
 		buffer[bidx].actionZ[j] = z;
-		setJointAction(b, j, actionTarget(j, action));
 		oldLogprob += tanhGaussianLogProb(z, action, mean);
 	}
 	d_body[ci] = b;
@@ -537,21 +515,8 @@ __device__ float oldr = 0.0f;
 __device__ int id = 0;
 __device__ float DT = 1.0f / 120.0f;
 __device__ int logframe = 0;
-__device__ __forceinline__ void resetBody(body* bodies, int id)
-{
-	if (bodies == nullptr || id < 0 || id >= d.n)
-		return;
 
-	body reset{};
-	reset.positionY = 20.0f;
-	reset.positonX = 0.0f;
-	reset.positonZ = 0.0f;
-	reset.alive = true;
-	reset.reached = false;
-
-	bodies[id]=reset;
-}
-__global__ void reward_kernel(int n, int s, replaybuffer* buffer,body* d_body ,float aliver, float deadr, float winr, float feetr,float handr,float headr,float torsor,float reachr) {
+__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float winr, float feetr, float handr, float headr, float torsor, float reachr) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
@@ -564,39 +529,38 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer,body* d_body ,f
 	float curdist = sqrtf(dx * dx + dy * dy);
 	float reached = c.reached ? winr : 0.0f;
 
-	
-	float progressreward =reachr*( 1.0f-( curdist / d.maxdisttotarget)) ;
-	
+
+	float progressreward = reachr * (1.0f - (curdist / d.maxdisttotarget));
+
 	float a = 0.0f;
 	if (c.robotLeftFootTouchingGround || c.robotRightFootTouchingGround) {
 		a = feetr;
 	}
 	float b = 0.0f;
-	if (c.robotHeadTouchingGround ) {
+	if (c.robotHeadTouchingGround) {
 		b = headr;
 	}
 	float C = 0.0f;
-	if (c.robotTorsoTouchingGround ) {
+	if (c.robotTorsoTouchingGround) {
 		C = torsor;
 	}
 	float d = 0.0f;
-		if (c.robotLeftHandTouchingGround||c.robotRightHandTouchingGround) {
-			d = torsor;
-		}
-		float knee = 0.0f;
-		if (c.robotLeftLowerLegTouchingGround || c.robotRightLowerLegTouchingGround) {
-			knee = -1.0f;
-		}
+	if (c.robotLeftHandTouchingGround || c.robotRightHandTouchingGround) {
+		d = torsor;
+	}
+	float knee = 0.0f;
+	if (c.robotLeftLowerLegTouchingGround || c.robotRightLowerLegTouchingGround) {
+		knee = -1.0f;
+	}
 
-	float reward = progressreward+ alivereward+ reached +a+b+C+d+knee + c.positionY ;
+	float reward = progressreward + alivereward + reached + a + b + C + d + knee + c.positionY;
 
 
 	buffer[bidx].reward = reward;
-	
+
 	atomicAdd(&d_reward, reward);
 	if (!c.alive || c.reached) {
-		
-		resetBody(d_body, i);
+
 	}
 
 }
@@ -705,7 +669,7 @@ __global__ void solvefrozenlayers(int n, int nin, int w, int D, int b, int p, bo
 
 
 }
-__device__ float normalize(float x,float max,float min){
+__device__ float normalize(float x, float max, float min) {
 	return ((x - min) / (max - min)) * 2.0f - 1.0f;
 	//[-1,1] bounded for better normalization for values in a rnage
 }
@@ -715,7 +679,7 @@ __device__ float boolTofloat(bool x) {
 	if (!x)a = 0.0f;
 	return a;
 }
-__global__ void netkernel(int n,body* d_body, const float* __restrict__ weights,
+__global__ void netkernel(int n, body* d_body, const float* __restrict__ weights,
 	const float* __restrict__ bias, float* nodevals, const Layer* layer, bool isactor, replaybuffer* buffer, int s, curandState* rng
 
 ) {
@@ -723,147 +687,147 @@ __global__ void netkernel(int n,body* d_body, const float* __restrict__ weights,
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 
-	
-
-	
-
-		for (int l = 0; l < d.layers; l++) {
-
-			if (l == 0) {
-
-				body b = d_body[i];
-
-				float dx = d.targetx - b.positonX;
-				float dy = d.targetz - b.positonZ;
-				float dist = sqrtf(dx * dx + dy * dy);
-
-				
-
-			
-
-
-				float input[40] = { dist / d.maxdisttotarget,
-					normalize(b.hipjoints,-30,50),
-
-
-					normalize(b.hipJointSideways,-10,45),
-					normalize(b.leftHipJointSideways,-10,45),
-					normalize(b.rightHipJointSideways,-10,45),
-					normalize(b.leftHipJointTwist,-45,45),
-					normalize(b.rightHipJointTwist,-45,45),
-
-					normalize(b.leftShoulderJoint,-60,170),
-					normalize(b.rightShoulderJoint,-60,170),
-
-					normalize(b.leftShoulderJointSideways,-90,90),
-					normalize(b.rightShoulderJointSideways,-90,90),
-
-					normalize(b.leftShoulderJointTwist,-90,90),
-					normalize(b.rightShoulderJointTwist,-90,90),
-
-					normalize(b.leftElbowJoint,0,150),
-					normalize(b.rightElbowJoint,0,150),
-
-					normalize(b.leftUpperLegJoint,-30,100),
-					normalize(b.rightUpperLegJoint,-30,100),
-
-					normalize(b.leftKneeJoint,0,140),
-					normalize(b.rightKneeJoint,0,140),
-
-					boolTofloat(b.robotHeadTouchingGround),
-
-					boolTofloat(b.robotLeftFootTouchingGround) ,
-					boolTofloat(b.robotRightFootTouchingGround) ,
-
-					boolTofloat(b.robotLeftForearmTouchingGround) ,
-					boolTofloat(b.robotRightForearmTouchingGround) ,
-
-					boolTofloat(b.robotLeftHandTouchingGround) ,
-					boolTofloat(b.robotRightHandTouchingGround) ,
-
-					boolTofloat(b.robotLeftLowerLegTouchingGround) ,
-					boolTofloat(b.robotRightLowerLegTouchingGround) ,
-
-					boolTofloat(b.robotLeftUpperArmTouchingGround) ,
-					boolTofloat(b.robotRightUpperArmTouchingGround) ,
-
-					boolTofloat(b.robotLeftUpperLegTouchingGround) ,
-					boolTofloat(b.robotRightUpperLegTouchingGround) ,
-
-					boolTofloat(b.robotPelvisTouchingGround) ,
-					boolTofloat(b.robotTorsoTouchingGround) ,
-					tanhf(b.velX/25.0f),
-					tanhf(b.velY/25.0f),
-					tanhf(b.velZ/25.0f),
-					tanhf(b.angleVelX/15.0f),
-					tanhf(b.angleVelY/15.0f),
-					tanhf(b.angleVelZ/15.0f),
 
 
 
-				};
-				int insize = 40;
-				if (isactor) {
-					int bidx = s * d.n + i;
-					for (int b = 0; b < insize; b++) {
-						buffer[bidx].s1[b] = input[b];
 
-					}
+	for (int l = 0; l < d.layers; l++) {
+
+		if (l == 0) {
+
+			body b = d_body[i];
+
+			float dx = d.targetx - b.positonX;
+			float dy = d.targetz - b.positonZ;
+			float dist = sqrtf(dx * dx + dy * dy);
+
+
+
+
+
+
+			float input[40] = { dist / d.maxdisttotarget,
+				normalize(b.hipjoints,-30,50),
+
+
+				normalize(b.hipJointSideways,-10,45),
+				normalize(b.leftHipJointSideways,-10,45),
+				normalize(b.rightHipJointSideways,-10,45),
+				normalize(b.leftHipJointTwist,-45,45),
+				normalize(b.rightHipJointTwist,-45,45),
+
+				normalize(b.leftShoulderJoint,-60,170),
+				normalize(b.rightShoulderJoint,-60,170),
+
+				normalize(b.leftShoulderJointSideways,-90,90),
+				normalize(b.rightShoulderJointSideways,-90,90),
+
+				normalize(b.leftShoulderJointTwist,-90,90),
+				normalize(b.rightShoulderJointTwist,-90,90),
+
+				normalize(b.leftElbowJoint,0,150),
+				normalize(b.rightElbowJoint,0,150),
+
+				normalize(b.leftUpperLegJoint,-30,100),
+				normalize(b.rightUpperLegJoint,-30,100),
+
+				normalize(b.leftKneeJoint,0,140),
+				normalize(b.rightKneeJoint,0,140),
+
+				boolTofloat(b.robotHeadTouchingGround),
+
+				boolTofloat(b.robotLeftFootTouchingGround) ,
+				boolTofloat(b.robotRightFootTouchingGround) ,
+
+				boolTofloat(b.robotLeftForearmTouchingGround) ,
+				boolTofloat(b.robotRightForearmTouchingGround) ,
+
+				boolTofloat(b.robotLeftHandTouchingGround) ,
+				boolTofloat(b.robotRightHandTouchingGround) ,
+
+				boolTofloat(b.robotLeftLowerLegTouchingGround) ,
+				boolTofloat(b.robotRightLowerLegTouchingGround) ,
+
+				boolTofloat(b.robotLeftUpperArmTouchingGround) ,
+				boolTofloat(b.robotRightUpperArmTouchingGround) ,
+
+				boolTofloat(b.robotLeftUpperLegTouchingGround) ,
+				boolTofloat(b.robotRightUpperLegTouchingGround) ,
+
+				boolTofloat(b.robotPelvisTouchingGround) ,
+				boolTofloat(b.robotTorsoTouchingGround) ,
+				tanhf(b.velX / 25.0f),
+				tanhf(b.velY / 25.0f),
+				tanhf(b.velZ / 25.0f),
+				tanhf(b.angleVelX / 15.0f),
+				tanhf(b.angleVelY / 15.0f),
+				tanhf(b.angleVelZ / 15.0f),
+
+
+
+			};
+			int insize = 40;
+			if (isactor) {
+				int bidx = s * d.n + i;
+				for (int b = 0; b < insize; b++) {
+					buffer[bidx].s1[b] = input[b];
+
 				}
-				else {
-					int bidx = s * d.n + i;
-					for (int b = 0; b < insize; b++) {
-						input[b] = buffer[bidx].s1[b];
-					}
-				}
-				int didx = layer[0].dIdx;
-
-				firstlayer(layer[0].Nout, i, 0, didx, 40, input, weights, bias, nodevals);
 			}
 			else {
-
-
-				int nin = layer[l - 1].Nout;
-				int wl = layer[l].wIdx;
-				int di = layer[l].dIdx;
-				int b = layer[l].bIdx;
-				int p = layer[l - 1].dIdx;
-
-				bool isout = (l == d.layers - 1);
-
-
-				solvelayers(layer[l].Nout, i, nin, wl, di, b, p, isout, weights, bias, nodevals);
-
+				int bidx = s * d.n + i;
+				for (int b = 0; b < insize; b++) {
+					input[b] = buffer[bidx].s1[b];
+				}
 			}
+			int didx = layer[0].dIdx;
 
-
-
-
-
-		}
-		float outd = layer[d.layers - 1].dIdx;
-		if (isactor) {
-			getoutput(outd, nodevals, d_body, buffer, s, i, rng);
+			firstlayer(layer[0].Nout, i, 0, didx, 40, input, weights, bias, nodevals);
 		}
 		else {
-			getQvalue(s, i, outd, nodevals, buffer);
+
+
+			int nin = layer[l - 1].Nout;
+			int wl = layer[l].wIdx;
+			int di = layer[l].dIdx;
+			int b = layer[l].bIdx;
+			int p = layer[l - 1].dIdx;
+
+			bool isout = (l == d.layers - 1);
+
+
+			solvelayers(layer[l].Nout, i, nin, wl, di, b, p, isout, weights, bias, nodevals);
+
 		}
-	
+
+
+
+
+
+	}
+	float outd = layer[d.layers - 1].dIdx;
+	if (isactor) {
+		getoutput(outd, nodevals, d_body, buffer, s, i, rng);
+	}
+	else {
+		getQvalue(s, i, outd, nodevals, buffer);
+	}
+
 
 
 }
-__global__ void getdone(int n, body* b,replaybuffer* buffer,int s) {
+__global__ void getdone(int n, body* b, replaybuffer* buffer, int s) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
 	if (!b[i].alive || b[i].reached) {
-		
+
 		buffer[bidx].done = true;
 	}
 	else {
 		buffer[bidx].done = false;
 	}
-	
+
 }
 
 
@@ -942,8 +906,8 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 
 }
 void reward(int s) {
-	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state,d_body,alive,dead,win,feettouching,handtouching,headtouching,torsotouching,reachtarget );
-	
+	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_body, alive, dead, win, feettouching, handtouching, headtouching, torsotouching, reachtarget);
+
 
 
 }
@@ -1030,17 +994,17 @@ void frozennet(bool isactor) {
 void net(int s, bool isactor) {
 
 	if (isactor) {
-		netkernel << <blocks(robot_count), threads >> > (robot_count,d_body,  d_actor_weights, d_actor_bias, d_antity_nodevals, d_actlayer, isactor, d_state, s, d_rngstate);
+		netkernel << <blocks(robot_count), threads >> > (robot_count, d_body, d_actor_weights, d_actor_bias, d_antity_nodevals, d_actlayer, isactor, d_state, s, d_rngstate);
 	}
 	else {
-		netkernel << <blocks(robot_count), threads >> > (robot_count,d_body, d_critic_weights, d_critic_bias, d_antity_nodevals, d_critlayer, isactor, d_state, s, d_rngstate);
+		netkernel << <blocks(robot_count), threads >> > (robot_count, d_body, d_critic_weights, d_critic_bias, d_antity_nodevals, d_critlayer, isactor, d_state, s, d_rngstate);
 
 	}
 
 }
 
 void run_network() {
-	
+
 	net(step, true);//actor forward pass
 	net(step, false);//critic forward pass
 	//updaterobot();
@@ -1187,7 +1151,7 @@ void restart() {
 
 	initnetwork();
 	printf("network initialized \n");
-	
+
 
 
 

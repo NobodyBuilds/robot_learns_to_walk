@@ -24,114 +24,24 @@ inline float floorRotationY = 0.0f;
 /////
 //robot variables
 // Number of independent robot instances in the environment.
-inline int robot_count =2;
-inline int sample_robot_count = 2;
-
-struct body {
-	float positonX = 0.0f;
-	float positionY = 0.0f;
-	float positonZ = 0.0f;
-
-	float velX = 0.0f;
-	float velY = 0.0f;
-	float velZ = 0.0f;
-
-	float angleVelX = 0.0f;
-	float angleVelY = 0.0f;
-	float angleVelZ = 0.0f;
-
-    float leftShoulderJoint = 0.0f;
-    float leftShoulderJointSideways = 0.0f;
-    float leftShoulderJointTwist = 0.0f;
-    float leftElbowJoint = 0.0f;
-	float rightShoulderJoint = 0.0f;
-	float rightShoulderJointSideways = 0.0f;
-	float rightShoulderJointTwist = 0.0f;
-	float rightElbowJoint = 0.0f;
-	float hipjoints = 0.0f;
-	float rightHipJointSideways = 0.0f;
-	float leftHipJointSideways = 0.0f;
-	float leftHipJointTwist = 0.0f;
+inline int robot_count =1;
+inline int sample_robot_count = 1;
 
 
-	float leftUpperLegJoint = 0.0f;
-	float leftKneeJoint = 0.0f;
-	float rightUpperLegJoint = 0.0f;
-	float rightKneeJoint = 0.0f;
 
-
-	float hipJointSideways = 0.0f;
-	float rightHipJointTwist = 0.0f;
-
-	bool robotPelvisTouchingGround = false;
-	bool robotTorsoTouchingGround = false;
-	bool robotHeadTouchingGround = false;
-	bool robotLeftUpperLegTouchingGround = false;
-	bool robotLeftLowerLegTouchingGround = false;
-	bool robotLeftFootTouchingGround = false;
-	bool robotRightUpperLegTouchingGround = false;
-	bool robotRightLowerLegTouchingGround = false;
-	bool robotRightFootTouchingGround = false;
-	bool robotLeftUpperArmTouchingGround = false;
-	bool robotLeftForearmTouchingGround = false;
-	bool robotLeftHandTouchingGround = false;
-	bool robotRightUpperArmTouchingGround = false;
-	bool robotRightForearmTouchingGround = false;
-	bool robotRightHandTouchingGround = false;
-
-	bool alive = true;
-	bool reached = false;
-
-};
 
 
 inline __device__ float clamp(float val, float min, float max) {
 	return fminf(fmaxf(val, min), max);
 }
 
-inline __device__ float gravity = -9.8f;
+
 inline __device__ float friction = 0.9f;
-inline __device__ float drag = 0.98f;
-inline __device__ float bounce = 0.0f;
-inline __device__ float deltaTime = 1.0f/120.0f;
-
-inline __device__ float robotScale = 3.0f;
+inline  float dt = 1.0f/120.0f;
 
 
-// Host variables for UI
-inline float h_robotX = 0.0f;
-inline float h_robotY = 12.0f;
-inline float h_robotZ = 0.0f;
 
 
-inline float h_robotMoveX = 0.0f;
-inline float h_robotMoveY = 0.0f;
-inline float h_robotMoveZ = 0.0f;
-
-inline float h_leftShoulderJoint = 0.0f;
-inline float h_rightShoulderJoint = 0.0f;
-inline float h_leftShoulderJointSideways = 0.0f;
-inline float h_rightShoulderJointSideways = 0.0f;
-inline float h_leftShoulderJointTwist = 0.0f;
-inline float h_rightShoulderJointTwist = 0.0f;
-inline float h_leftElbowJoint = 0.0f;
-inline float h_rightElbowJoint = 0.0f;
-inline float h_hipjoints = -20.0f;
-inline float h_hipJointSideways = 0.0f;
-inline float h_leftUpperLegJoint = 0.0f;
-inline float h_rightUpperLegJoint = 0.0f;
-inline float h_leftHipJointSideways = 0.0f;
-inline float h_rightHipJointSideways = 0.0f;
-inline float h_leftHipJointTwist = 0.0f;
-inline float h_rightHipJointTwist = 0.0f;
-inline float h_leftKneeJoint = 0.0f;
-inline float h_rightKneeJoint = 0.0f;
-
-inline float h_gravity = -9.8f;
-inline float h_friction = 0.9f;
-inline float h_drag = 0.98f;
-inline float h_bounce = 0.0f;
-inline float h_robotScale = 1.0f;
 
 /////
 //env
@@ -154,7 +64,7 @@ inline float fpsTimer = 0.0f;
 inline float fpsCount = 0;
 inline float fps = 0;
 inline float avgFps = 0;
-inline float dt = 1.0f / 120.0f;
+inline float h_dt = 1.0f / 120.0f;
 inline int inputs = 40;
 inline int output = 18;
 inline int actor_layers;
@@ -202,7 +112,6 @@ inline float* d_actor_weights = nullptr;
 inline float* d_critic_weights = nullptr;
 inline float* d_actor_bias = nullptr;
 inline float* d_critic_bias = nullptr;
-inline body* d_body = nullptr;
 inline replaybuffer* d_state = nullptr;
 inline Layer* d_actlayer = nullptr;
 inline Layer* d_critlayer = nullptr;
@@ -237,60 +146,162 @@ inline float torsotouching = -0.0f;
 
 
 
-inline float x = 0.0f;
-inline float y = 15.0f;
-inline float z = 0.0f;
-inline float scale = 1.0f;
-inline float r=0.10f;
-inline float g=0.40f;
-inline float b=0.80f;
 
-inline float h_tosorx;
-inline float h_tosory;
-inline float h_headx;
-inline float h_heady;
-inline float h_leftshoulx;
-inline float h_leftshouly;
-inline float h_rightshoulx;
-inline float h_rightshouly;
-inline float h_leftelbowx;
-inline float h_leftelbowy;
-inline float h_rightelbowx;
-inline float h_rightelbowy;
-inline float h_leftuplegx;
-inline float h_leftuplegy;
-inline float h_rightuplegx;
-inline float h_rightuplegy;
-inline float h_leftkneex;
-inline float h_leftkneey;
-inline float h_rightkneex;
-inline float h_rightkneey;
 
-inline __device__ float d_x = 0.0f;
-inline __device__ float d_y = 15.0f;
-inline __device__ float d_z = 0.0f;
-inline __device__ float d_scale = 1.0f;
-inline __device__ float d_r=0.10f;
-inline __device__ float d_g=0.40f;
-inline __device__ float d_b=0.80f;
+//robot.cu data
 
-inline __device__ float d_tosorx;
-inline __device__ float d_tosory;
-inline __device__ float d_headx;
-inline __device__ float d_heady;
-inline __device__ float d_leftshoulx;
-inline __device__ float d_leftshouly;
-inline __device__ float d_rightshoulx;
-inline __device__ float d_rightshouly;
-inline __device__ float d_leftelbowx;
-inline __device__ float d_leftelbowy;
-inline __device__ float d_rightelbowx;
-inline __device__ float d_rightelbowy;
-inline __device__ float d_leftuplegx;
-inline __device__ float d_leftuplegy;
-inline __device__ float d_rightuplegx;
-inline __device__ float d_rightuplegy;
-inline __device__ float d_leftkneex;
-inline __device__ float d_leftkneey;
-inline __device__ float d_rightkneex;
-inline __device__ float d_rightkneey;
+struct rigidbody {
+
+    bool isstatic;
+    float mass;
+    float invmass;
+    float3 position;
+    float3 velocity;
+    float3 angularvel;
+    float3 force;
+    float3 torque;
+    float3 inertia;
+    float3 invinertia;
+    float3 halfsize;
+    float4 quatrotation;
+   
+};
+
+
+
+struct robotbody {
+    rigidbody head;
+    rigidbody torso;
+
+    rigidbody leftupperarm;
+    rigidbody righttupperarm;
+
+    rigidbody leftforearm;
+    rigidbody rightforearm;
+
+    rigidbody leftthigh;
+    rigidbody rightthigh;
+
+    rigidbody leftshin;
+    rigidbody rightshin;
+};
+
+struct joint {
+    float minAngle;
+    float maxAngle;
+
+    float targetAngle;
+    float motorStrength;
+   
+
+    float3 parentanchor;
+    float3 childanchor;
+
+    float3 axis;
+    rigidbody* parent;
+    rigidbody* child;
+    
+
+};
+
+inline std::vector<robotbody> bodydata;
+inline std::vector<quadVertex3d> renderdata;
+
+
+__host__ __device__
+inline float3 operator+(const float3& a, const float3& b) {
+    return make_float3(
+        a.x + b.x,
+        a.y + b.y,
+        a.z + b.z
+    );
+}
+
+__host__ __device__
+inline float3 operator-(const float3& a, const float3& b) {
+    return make_float3(
+        a.x - b.x,
+        a.y - b.y,
+        a.z - b.z
+    );
+}
+
+__host__ __device__
+inline float3 operator*(const float3& a, float s) {
+    return make_float3(
+        a.x * s,
+        a.y * s,
+        a.z * s
+    );
+}
+
+__host__ __device__
+inline float3 operator*(float s, const float3& a) {
+    return make_float3(
+        a.x * s,
+        a.y * s,
+        a.z * s
+    );
+}
+
+__host__ __device__
+inline float3 operator/(const float3& a, float s) {
+    return make_float3(
+        a.x / s,
+        a.y / s,
+        a.z / s
+    );
+}
+
+__host__ __device__
+inline float3& operator+=(float3& a, const float3& b) {
+    a.x += b.x;
+    a.y += b.y;
+    a.z += b.z;
+    return a;
+}
+
+__host__ __device__
+inline float3& operator-=(float3& a, const float3& b) {
+    a.x -= b.x;
+    a.y -= b.y;
+    a.z -= b.z;
+    return a;
+}
+
+__host__ __device__
+inline float3& operator*=(float3& a, float s) {
+    a.x *= s;
+    a.y *= s;
+    a.z *= s;
+    return a;
+}
+
+__host__ __device__
+inline float3& operator/=(float3& a, float s) {
+    a.x /= s;
+    a.y /= s;
+    a.z /= s;
+    return a;
+}
+
+__host__ __device__
+inline float3 operator+(const float3& a, float b) {
+    return make_float3(a.x + b, a.y + b, a.z + b);
+}
+
+__host__ __device__
+inline float3 operator+(float a, const float3& b) {
+    return make_float3(a + b.x, a + b.y, a + b.z);
+}
+
+__host__ __device__
+inline float3 operator-(const float3& a, float b) {
+    return make_float3(a.x - b, a.y - b, a.z - b);
+}
+
+__host__ __device__
+inline float3 operator-(float a, const float3& b) {
+    return make_float3(a - b.x, a - b.y, a - b.z);
+}
+

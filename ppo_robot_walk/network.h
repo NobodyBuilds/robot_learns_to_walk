@@ -1,5 +1,5 @@
 #pragma once
-
+#include <string>
 void allocate();
 void initnetwork();
 void setmaxdisttotarget();

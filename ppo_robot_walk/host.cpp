@@ -24,8 +24,8 @@ int main()
 	ImGui_ImplOpenGL3_Init(glsl_version);
 	noRender.movementSpeed = 20.0f;
 	initfloor();
-	initrobot();
-	initnetwork();
+	initrobot(robot_count);
+	//initnetwork();
 	double lastTime = glfwGetTime();
 	double fpsClock = lastTime;
 	spriteData target = noRender.loadSprite("D:\\visual_studio\\ppo_robot_walk\\ppo_robot_walk\\circle.png");
@@ -39,10 +39,10 @@ int main()
 		noRender.pollEvents();
 		noRender.clearScreen(0.1f, 0.1f, 0.1f);
 		if (run_ai) {
-			run_network();
+			//run_network();
 		}
 		else {
-			//updaterobot();
+			//todo:updaterobot();
 		}
 
 		timer += dt;
@@ -72,14 +72,12 @@ int main()
 		}
 	}
 
-	save_weights();
+	//save_weights();
 	noRender.closeWindow();
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
-	cudafree();
-#if usecuda
-	freedevmem();
-#endif
+	//cudafree();
+
 	return 0;
 }

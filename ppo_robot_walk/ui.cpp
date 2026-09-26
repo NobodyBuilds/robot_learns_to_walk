@@ -11,23 +11,7 @@
 #include "network.h"
 
 
-	float p[3] = {x,y,z};
-	float color[3] = {r,g,b};
 	
-	float h_torso[2] = { 0.0f, 0.0f };
-	float h_head[2] = { 0.0f, 0.0f };
-
-	float h_leftshoul[2] = { 0.0f, 0.0f };
-	float h_rightshoul[2] = { 0.0f, 0.0f };
-
-	float h_leftelbow[2] = { 0.0f, 0.0f };
-	float h_rightelbow[2] = { 0.0f, 0.0f };
-
-	float h_leftupleg[2] = { 0.0f, 0.0f };
-	float h_rightupleg[2] = { 0.0f, 0.0f };
-
-	float h_leftknee[2] = { 0.0f, 0.0f };
-	float h_rightknee[2] = { 0.0f, 0.0f };
 
 void renderUI() {
 	//static std::vector<float> learningCurve;
@@ -46,68 +30,17 @@ void renderUI() {
 	ImGui::Begin("debug");
 	ImGui::Text("fps: %3f  time: %3f", avgFps, timer);
 	
-	if (ImGui::InputInt("num robots", &sample_robot_count, 1, 100)) {
-		restart();
-	}
-	ImGui::DragFloat3("pos", p,0.1f,-1000.0f,1000.0f);
+	//if (ImGui::InputInt("num robots", &sample_robot_count, 1, 100)) {
+		//restart();
+	//}
+	//ImGui::DragFloat3("pos", &test.position.x,0.1f,-1000.0f,1000.0f);
+	//ImGui::DragFloat4("quat", &test.quatrotation.x,0.1f,-1000.0f,1000.0f);
 
-	ImGui::DragFloat3("color", color, 0.005f, -0.0f, 1.0f);
 	
 	
-	ImGui::DragFloat2("Torso", h_torso, 0.005f, -360.0f, 360.0f);
-	ImGui::DragFloat2("Head", h_head, 0.005f, -360.0f, 360.0f);
-
-	ImGui::DragFloat2("Left Shoulder", h_leftshoul, 0.005f, -360.0f, 360.0f);
-	ImGui::DragFloat2("Right Shoulder", h_rightshoul, 0.005f, -360.0f, 360.0f);
-
-	ImGui::DragFloat2("Left Elbow", h_leftelbow, 0.005f, -360.0f, 360.0f);
-	ImGui::DragFloat2("Right Elbow", h_rightelbow, 0.005f, -360.0f, 360.0f);
-
-	ImGui::DragFloat2("Left Upper Leg", h_leftupleg, 0.005f, -360.0f, 360.0f);
-	ImGui::DragFloat2("Right Upper Leg", h_rightupleg, 0.005f, -360.0f, 360.0f);
-
-	ImGui::DragFloat2("Left Knee", h_leftknee, 0.005f, -360.0f, 360.0f);
-	ImGui::DragFloat2("Right Knee", h_rightknee, 0.005f, -360.0f, 360.0f);
 	
 
 	
-	x = p[0];
-	y = p[1];
-	z = p[2];
-
-	
-	r = color[0];
-	g = color[1];
-	b = color[2];
-	h_tosorx = h_torso[0];
-	h_tosory = h_torso[1];
-
-	h_headx = h_head[0];
-	h_heady = h_head[1];
-
-	h_leftshoulx = h_leftshoul[0];
-	h_leftshouly = h_leftshoul[1];
-
-	h_rightshoulx = h_rightshoul[0];
-	h_rightshouly = h_rightshoul[1];
-
-	h_leftelbowx = h_leftelbow[0];
-	h_leftelbowy = h_leftelbow[1];
-
-	h_rightelbowx = h_rightelbow[0];
-	h_rightelbowy = h_rightelbow[1];
-
-	h_leftuplegx = h_leftupleg[0];
-	h_leftuplegy = h_leftupleg[1];
-
-	h_rightuplegx = h_rightupleg[0];
-	h_rightuplegy = h_rightupleg[1];
-
-	h_leftkneex = h_leftknee[0];
-	h_leftkneey = h_leftknee[1];
-
-	h_rightkneex = h_rightknee[0];
-	h_rightkneey = h_rightknee[1];
 
 	//
 	//ImGui::Text("Gen: %d  rollout gen %d  buffer %d / %d  time:%f", gen, rolloutstep, step * robot_count, replaybuffersize, rollout_time);
@@ -123,14 +56,7 @@ void renderUI() {
 	//ImGui::DragFloat("floorRotationY", &floorRotationY, 0.1f);
 	
 
-	//ImGui::Separator();
-	//ImGui::Text("Robot Position (Reset)");
-	//if(ImGui::DragFloat("robotX", &h_robotX, 0.1f)) {  }
-	//if(ImGui::DragFloat("robotY", &h_robotY, 0.1f)) {  }
-	//if(ImGui::DragFloat("robotZ", &h_robotZ, 0.1f)) {  }
-	//ImGui::DragFloat("robotScale", &h_robotScale, 0.1f);
-	//ImGui::DragFloat("rotx", &rotx, 0.1f);
-	//ImGui::DragFloat("roty", &roty, 0.1f);
+	
 
 
 
@@ -148,36 +74,7 @@ void renderUI() {
 	//ImGui::DragFloat("head touching reward", &headtouching, 0.01f, -100.0f, 100.0f);
 	//ImGui::DragFloat("torso touching reward", &torsotouching, 0.01f, -100.0f, 100.0f);
 	//ImGui::Separator();
-	//ImGui::Text("Robot 3D Movement (local acceleration)");
-	//if(ImGui::DragFloat("robotMoveX", &h_robotMoveX, 0.1f, -25.0f, 25.0f)) { syncvar(29); }
-	//if(ImGui::DragFloat("robotMoveY", &h_robotMoveY, 0.1f, -25.0f, 25.0f)) { syncvar(30); }
-	//if(ImGui::DragFloat("robotMoveZ", &h_robotMoveZ, 0.1f, -25.0f, 25.0f)) { syncvar(31); }
-
-	//ImGui::Separator();
-	//ImGui::Text("Robot Joints");
-	//if(ImGui::DragFloat("leftShoulderJoint", &h_leftShoulderJoint, 1.0f)) { syncvar(9); }
-	//if(ImGui::DragFloat("rightShoulderJoint", &h_rightShoulderJoint, 1.0f)) { syncvar(10); }
-	//if(ImGui::DragFloat("leftShoulderJointSideways", &h_leftShoulderJointSideways, 1.0f, -90.0f, 90.0f)) { syncvar(21); }
-	//if(ImGui::DragFloat("rightShoulderJointSideways", &h_rightShoulderJointSideways, 1.0f, -90.0f, 90.0f)) { syncvar(22); }
-	//if(ImGui::DragFloat("leftShoulderJointTwist", &h_leftShoulderJointTwist, 1.0f, -90.0f, 90.0f)) { syncvar(23); }
-	//if(ImGui::DragFloat("rightShoulderJointTwist", &h_rightShoulderJointTwist, 1.0f, -90.0f, 90.0f)) { syncvar(24); }
-	//if(ImGui::DragFloat("leftElbowJoint", &h_leftElbowJoint, 1.0f)) { syncvar(11); }
-	//if(ImGui::DragFloat("rightElbowJoint", &h_rightElbowJoint, 1.0f)) { syncvar(12); }
-	//if(ImGui::DragFloat("hipjoints", &h_hipjoints, 1.0f)) { syncvar(13); }
-	//if(ImGui::DragFloat("hipJointSideways", &h_hipJointSideways, 1.0f)) { syncvar(14); }
-	//if(ImGui::DragFloat("leftUpperLegJoint", &h_leftUpperLegJoint, 1.0f)) { syncvar(15); }
-	//if(ImGui::DragFloat("rightUpperLegJoint", &h_rightUpperLegJoint, 1.0f)) { syncvar(16); }
-	//if(ImGui::DragFloat("leftHipJointSideways", &h_leftHipJointSideways, 1.0f, -10.0f, 45.0f)) { syncvar(25); }
-	//if(ImGui::DragFloat("rightHipJointSideways", &h_rightHipJointSideways, 1.0f, -10.0f, 45.0f)) { syncvar(26); }
-	//if(ImGui::DragFloat("leftHipJointTwist", &h_leftHipJointTwist, 1.0f, -45.0f, 45.0f)) { syncvar(27); }
-	//if(ImGui::DragFloat("rightHipJointTwist", &h_rightHipJointTwist, 1.0f, -45.0f, 45.0f)) { syncvar(28); }
-	//if(ImGui::DragFloat("leftKneeJoint", &h_leftKneeJoint, 1.0f)) { syncvar(17); }
-	//if(ImGui::DragFloat("rightKneeJoint", &h_rightKneeJoint, 1.0f)) { syncvar(18); }
-//	ImGui::Text("Robot Physics");
-//	if(ImGui::DragFloat("gravity", &h_gravity, 0.1f)) { syncvar(1); }
-//	if(ImGui::DragFloat("friction", &h_friction, 0.01f)) { syncvar(2); }
-//	if(ImGui::DragFloat("drag", &h_drag, 0.01f)) { syncvar(3); }
-//	if(ImGui::DragFloat("bounce", &h_bounce, 0.01f)) { syncvar(4); }
+	
 
 	//ImGui::DragFloat("target x ", &targetx, 0.1f, 0.0f, 1000.0f);
 	//ImGui::DragFloat("target z ", &targetz, 0.1f, 0.0f, 1000.0f);

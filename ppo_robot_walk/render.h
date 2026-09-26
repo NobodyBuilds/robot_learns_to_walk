@@ -1,10 +1,13 @@
 #pragma once
+
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include "norender.h"
+#include <iostream>
+#include <vector>
 void initfloor();
 void renderfloor();
-void initrobot();
-//void resetrobots();
-//void resetrobot(int id);
-//void updaterobot();
-
+void initrobot(int n);
 void renderRobot();
 void freedevmem();
+void resetRobots();
