@@ -12,8 +12,11 @@ int main()
 {
 	
 	noRender.createWindow(1900, 1200, "PPO Robot Walk", 1);
-	noRender.setup3D();
+	noRender.setup2D();
 	noRender.setupCamera();
+	cx = noRender.getCameraX();
+	cy = noRender.getCameraY();
+
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
@@ -23,32 +26,36 @@ int main()
 	const char* glsl_version = "#version 330";
 	ImGui_ImplOpenGL3_Init(glsl_version);
 	noRender.movementSpeed = 20.0f;
-	initfloor();
 	initrobot(robot_count);
 	//initnetwork();
+	initfloor();
 	double lastTime = glfwGetTime();
 	double fpsClock = lastTime;
-	spriteData target = noRender.loadSprite("D:\\visual_studio\\ppo_robot_walk\\ppo_robot_walk\\circle.png");
+	
+	float br = 0.22f;
+	float bg = 0.57f;
+	float bb = 0.8f;
+
 	while(noRender.isWindowOpen())
 	{
+		noRender.updateCamera(false);
+		noRender.setcamerapos(cx, cy, 0);
 		double now = glfwGetTime();
 		double frameTime = now - lastTime;
 		lastTime = now;
-		noRender.updateCamera();
 		noRender.setInputBlocked(io.WantCaptureMouse || io.WantCaptureKeyboard);
 		noRender.pollEvents();
-		noRender.clearScreen(0.1f, 0.1f, 0.1f);
+		noRender.clearScreen(br, bg, bb);
 		if (run_ai) {
 			//run_network();
 		}
 		else {
-			//todo:updaterobot();
+
 		}
 
 		timer += dt;
 		renderfloor();
-		render.sprite3D(target, targetx, 0.5f, targetz, targetradious, trx, Try);
-
+		cx = (tx<950.0f)?cx:tx;
 		renderRobot();
 		renderUI();
 

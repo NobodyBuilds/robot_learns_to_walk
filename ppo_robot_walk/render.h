@@ -5,9 +5,8 @@
 #include "norender.h"
 #include <iostream>
 #include <vector>
-void initfloor();
 void renderfloor();
+void initfloor();
 void initrobot(int n);
 void renderRobot();
-void freedevmem();
-void resetRobots();
+void regdummyquad();

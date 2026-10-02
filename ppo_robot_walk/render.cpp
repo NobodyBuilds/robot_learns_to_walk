@@ -2,37 +2,19 @@
 #include "norender.h"
 #include "render.h"
 #include "vars.h"
-
-
-void floordata() {
-	floorquads.clear();
-	bool white = true;
-	for (int i = 0; i < (int)pixelx* (int)pixely; i++) {
-		
-			quadtexture2d t;
-			if (white) {
-				t.r = 0.2f;
-				t.g = 0.2f;
-				t.b = 0.2f;
-				t.opacity = 1.0f;
-				floorquads.push_back(t);
-				white = false;
-			}
-			else {
-				t.r = 0.5f;
-				t.g = 0.5f;
-				t.b = 0.5f;
-				t.opacity = 1.0f;
-				floorquads.push_back(t);
-				white = true;
-			}
-	
-		
-	}
-}
+spriteData floorsprite;
 void initfloor() {
-	floordata();
+	
+	floorsprite = noRender.loadSprite("D:\\visual_studio\\ppo_robot_walk\\ppo_robot_walk\\floor.png");
 }
+
 void renderfloor() {
-	render.textureQuad3D(floorquads, floorX, floorY, floorZ, floorwidth, floorheight, (int)pixelx, (int)pixely,floorRotationX,floorRotationY);
+	float step = fsize * 0.95f;
+	float leftEdge = cx - noRender.getScreenWidth() * 0.5f;
+	float first = floorf(leftEdge / step) * step;   
+	int   n = (int)ceilf(noRender.getScreenWidth() / step) + 2;
+
+	for (int i = 0; i < n; i++)
+		render.sprite(floorsprite, first + i * step, floory, fsize);
 }
+

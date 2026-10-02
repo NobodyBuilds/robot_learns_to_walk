@@ -10,22 +10,23 @@
 inline int threads = 256;
 
 //floor variables
-inline std::vector<quadtexture2d> floorquads;
-inline float floorwidth = 1000.0f;
-inline float floorheight = 1000.0f;
-inline float pixelWidth = 15.3f;
-inline float pixelx = floorwidth / pixelWidth;
-inline float pixely = floorheight / pixelWidth;
-inline float floorY = 0.0f;
-inline float floorZ = 0.0f;
-inline float floorX = 0.0f;
-inline float floorRotationX = 90.0f;
-inline float floorRotationY = 0.0f;
+inline float floorx = 0.0f;
+inline float floory = 50.0f;
+inline float fsize = 200.0f;
+
+//camera
+
+inline float cx = 0.0f;
+inline float cy = 0.0f;
+inline float tx = 400.0f;
+
 /////
 //robot variables
 // Number of independent robot instances in the environment.
 inline int robot_count =1;
 inline int sample_robot_count = 1;
+inline bool dummyQuad = false;
+inline bool dummyCircle = false;
 
 
 
@@ -36,7 +37,6 @@ inline __device__ float clamp(float val, float min, float max) {
 }
 
 
-inline __device__ float friction = 0.9f;
 inline  float dt = 1.0f/120.0f;
 
 
@@ -46,14 +46,6 @@ inline  float dt = 1.0f/120.0f;
 /////
 //env
 #if network
-inline float targetx = 246;
-inline float targetz = 250.0f;
-inline float targetradious = 46.0f;
-inline float trx = 90.0f;
-inline float Try = 0.0f;
-inline float spawnx = 0.0f;
-inline float spawnz = 0.0f;
-inline float maxdisttotarget = 0.0f;
 inline float mloss = 0.0f;
 inline float oldmloss = 0.0f;
 inline float rollout_time = 0.0f;
@@ -137,75 +129,13 @@ inline int blocks(int n) {
 //rewards  
 inline float alive = 1.0f;
 inline float dead = -10.0f;
-inline float win = 25.0f;
-inline float reachtarget = 1.0f;
-inline float feettouching = 1.0f;
-inline float handtouching = -1.0f;
-inline float headtouching = -0.0f;
-inline float torsotouching = -0.0f;
 
 
 
 
 
-//robot.cu data
+inline std::vector<quadvertex2d> renderdata;
 
-struct rigidbody {
-
-    bool isstatic;
-    float mass;
-    float invmass;
-    float3 position;
-    float3 velocity;
-    float3 angularvel;
-    float3 force;
-    float3 torque;
-    float3 inertia;
-    float3 invinertia;
-    float3 halfsize;
-    float4 quatrotation;
-   
-};
-
-
-
-struct robotbody {
-    rigidbody head;
-    rigidbody torso;
-
-    rigidbody leftupperarm;
-    rigidbody righttupperarm;
-
-    rigidbody leftforearm;
-    rigidbody rightforearm;
-
-    rigidbody leftthigh;
-    rigidbody rightthigh;
-
-    rigidbody leftshin;
-    rigidbody rightshin;
-};
-
-struct joint {
-    float minAngle;
-    float maxAngle;
-
-    float targetAngle;
-    float motorStrength;
-   
-
-    float3 parentanchor;
-    float3 childanchor;
-
-    float3 axis;
-    rigidbody* parent;
-    rigidbody* child;
-    
-
-};
-
-inline std::vector<robotbody> bodydata;
-inline std::vector<quadVertex3d> renderdata;
 
 
 __host__ __device__
@@ -250,6 +180,14 @@ inline float3 operator/(const float3& a, float s) {
         a.x / s,
         a.y / s,
         a.z / s
+    );
+}
+__host__ __device__
+inline float3 operator/( float a, const float3& s) {
+    return make_float3(
+        a / s.x,
+        a / s.y,
+        a / s.z
     );
 }
 
