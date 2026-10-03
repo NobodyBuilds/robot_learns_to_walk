@@ -8,5 +8,6 @@
 void renderfloor();
 void initfloor();
 void initrobot(int n);
+void updateRobot(float dt);
 void renderRobot();
 void regdummyquad();
