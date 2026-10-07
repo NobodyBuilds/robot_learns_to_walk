@@ -1,57 +1,30 @@
 #include <cuda.h>
+#include <GLFW/glfw3.h>
+//#include <glad/glad.h>
 #include  <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <cuda_gl_interop.h>
 #include "vars.h"
 #include "render.h"
 #include "network.h"
 #include "norender.h"
 #include "ui.h"
 
-#define maxjointstrength 2.0f
+
+#define G 98.1f
+
+#define itrs 3
 
 std::vector<circlevertex2d> jointdata;
-std::vector<quadvertex2d> dummyquad;
-std::vector<circlevertex2d> dummycircle;
+
 std::vector<circlevertex2d> jointrenderdata;
 
-struct part {
-	float3 col;
-	float angvel,mass,inertia,invmass,invinertia,torque;
-	float angle;
-	float2 pos;
-	float2 size;
-	float2 vel;
-	float2 force;
-	bool isstatic = false;
-};
-struct joint {
-	part* parent;
-	part* child;
-	float2 parentanchor, childanchor;
-	float targetangle, strength;
-	float minangle, maxangle;
-};
-struct body {
-	part torso;
-	part leftthigh;
-	part rightthigh;
-	part leftshin;
-	part rightshin;
-	part leftfoot;
-	part rightfoot;
-	joint leftknee, rightknee;
-	joint leftankle, rightankle;
-	joint lefthip, righthip;
-};
+
 std::vector<body> robotdata;
-float dx = 0.0f;
-float dy = 0.0f;
 
-float dr, dg, db;
-float dw, dh;
-float drot = 0.0f;
-
-
+circlevertex2d* d_jointdata = nullptr;
+quadvertex2d* d_renderdata = nullptr;
+__device__ __host__
 void initpart(float2 pos, float2 size, float3 col,float mass, part& p) {
 	p.pos = pos;
 	p.size = size;
@@ -66,6 +39,7 @@ void initpart(float2 pos, float2 size, float3 col,float mass, part& p) {
 	p.torque = 0.0f;
 	p.angvel = 0.0f;
 }
+__device__ __host__
 void initjoint(part* parent, part* child, float2 parentanchor, float2 childanchor,float2 minmax,  joint& j) {
 	j.parent = parent;
 	j.child = child;
@@ -95,39 +69,94 @@ void setrobotdata(int n) {
 		initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, {-10,10}, robotdata[i].rightankle);
 	}
 }
+__global__ void d_setrobotdata(int n, body* robotdata) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= n) return;
+	
+	initpart({ 500.0f,570.0f }, { 200,70 }, { 0,1,0 }, 100.0f, robotdata[i].torso);
+	initpart({ 500.0f,460.0f }, { 40,150 }, { 1,0,0 }, 50.0f, robotdata[i].leftthigh);
+	initpart({ 500.0f,460.0f }, { 40,150 }, { 1,0,0 }, 50.0f, robotdata[i].rightthigh);
+	initpart({ 500.0f,310.0f }, { 40,150 }, { 0,0,1 }, 30.0f, robotdata[i].leftshin);
+	initpart({ 500.0f,310.0f }, { 40,150 }, { 0,0,1 }, 30.0f, robotdata[i].rightshin);
+	initpart({ 500.0f,185.0f + 50.0f}, { 80,40 }, { 1,1,0 }, 20.0f, robotdata[i].leftfoot);
+	initpart({ 500.0f,185.0f + 50.0f}, { 80,40 }, { 1,1,0 }, 20.0f, robotdata[i].rightfoot);
+	initjoint(&robotdata[i].torso, &robotdata[i].leftthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata[i].lefthip);
+	initjoint(&robotdata[i].torso, &robotdata[i].rightthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata[i].righthip);
+	initjoint(&robotdata[i].leftthigh, &robotdata[i].leftshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].leftknee);
+	initjoint(&robotdata[i].rightthigh, &robotdata[i].rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].rightknee);
+	initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata[i].leftankle);
+	initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata[i].rightankle);
+
+
+}
+__global__ void resetrobotidxkernel(int idx, body* robotdata) {
+	int i = idx;
+	initpart({ 500.0f,520.0f }, { 200,70 }, { 0,1,0 }, 100.0f, robotdata[i].torso);
+	initpart({ 500.0f,410.0f }, { 40,150 }, { 1,0,0 }, 50.0f, robotdata[i].leftthigh);
+	initpart({ 500.0f,410.0f }, { 40,150 }, { 1,0,0 }, 50.0f, robotdata[i].rightthigh);
+	initpart({ 500.0f,260.0f }, { 40,150 }, { 0,0,1 }, 30.0f, robotdata[i].leftshin);
+	initpart({ 500.0f,260.0f }, { 40,150 }, { 0,0,1 }, 30.0f, robotdata[i].rightshin);
+	initpart({ 500.0f,185.0f }, { 80,40 }, { 1,1,0 }, 20.0f, robotdata[i].leftfoot);
+	initpart({ 500.0f,185.0f }, { 80,40 }, { 1,1,0 }, 20.0f, robotdata[i].rightfoot);
+	initjoint(&robotdata[i].torso, &robotdata[i].leftthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata[i].lefthip);
+	initjoint(&robotdata[i].torso, &robotdata[i].rightthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata[i].righthip);
+	initjoint(&robotdata[i].leftthigh, &robotdata[i].leftshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].leftknee);
+	initjoint(&robotdata[i].rightthigh, &robotdata[i].rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].rightknee);
+	initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata[i].leftankle);
+	initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata[i].rightankle);
+
+}
+void resetrobotidx(int idx) {
+	resetrobotidxkernel<<<1, 1>>>(idx, d_bodies);
+}
+static cudaGraphicsResource_t bodyres = nullptr;
+static cudaGraphicsResource_t jointres = nullptr;
+
+float rs, ls ;
+float ra, la;
+void registervbo(int n) {
+
+	unsigned int id1 = vbo_id.quad_instanced_vbo(n*7, 1);
+	unsigned int id2 = vbo_id.circle_instanced_vbo(n*10, 1);
+
+	if (id1 == 0||id2==0) {
+		printf("vbo register error");
+	}
+
+	cudaError_t err = cudaGraphicsGLRegisterBuffer(&bodyres, id1, cudaGraphicsRegisterFlagsWriteDiscard);
+//	geterror("body register buffer", err);
+	 err = cudaGraphicsGLRegisterBuffer(&jointres, id2, cudaGraphicsRegisterFlagsWriteDiscard);
+	// geterror("joint register buffer", err);
+}
+void unregistervbo() {
+
+	if (bodyres) {
+	cudaGraphicsUnregisterResource(bodyres);
+	bodyres = nullptr;
+
+	}
+	if (jointres) {
+	cudaGraphicsUnregisterResource(jointres);
+	jointres = nullptr;
+
+	}
+}
 void initrobot(int n) {
-	renderdata.resize(n*7);
-	jointrenderdata.resize(n* 10);
-	robotdata.resize(n);
-	setrobotdata(n);
-	dragfloat("left hip strength", &robotdata[0].lefthip.strength, 0.1f);
-	dragfloat("left hip angle", &robotdata[0].lefthip.targetangle, 0.1f);
-	dragfloat("right hip strength", &robotdata[0].righthip.strength, 0.1f);
-	dragfloat("right hip angle", &robotdata[0].righthip.targetangle, 0.1f);
-	dragfloat("left knee strength", &robotdata[0].leftknee.strength, 0.1f);
-	dragfloat("left knee angle", &robotdata[0].leftknee.targetangle, 0.1f);
-	dragfloat("right knee strength", &robotdata[0].rightknee.strength, 0.1f);
-	dragfloat("right knee angle", &robotdata[0].rightknee.targetangle, 0.1f);
-	dragfloat("left ankle strength", &robotdata[0].leftankle.strength, 0.1f);
-	dragfloat("left ankle angle", &robotdata[0].leftankle.targetangle, 0.1f);
-	dragfloat("right ankle strength", &robotdata[0].rightankle.strength, 0.1f);
-	dragfloat("right ankle angle", &robotdata[0].rightankle.targetangle, 0.1f);
-	dummyquad.clear();
-	dummycircle.clear();
+	//renderdata.resize(n*7);
+//	jointrenderdata.resize(n* 10);
+	//robotdata.resize(n);
+	registervbo(n);
+	cudaMalloc(&d_bodies, n * sizeof(body));
+	cudaMalloc(&d_jointdata, n* 10 * sizeof(circlevertex2d));
+	cudaMalloc(&d_renderdata, n*7 * sizeof(quadvertex2d));
+
+	d_setrobotdata<<<blocks(n),threads >> >(n, d_bodies);
+	
+	
 	
 }
 
-void drawdummyquad(quadvertex2d& quad, float2 pos, float2 size, float3 col, float rot) {
-	quad.x = pos.x;
-	quad.y = pos.y;
-	quad.width = size.x;
-	quad.height = size.y;
-	quad.r = col.x;
-	quad.g = col.y;
-	quad.b = col.z;
-	quad.rotation = rot;
-}
-
+__device__ __host__
 float2 getworldanchor(part& p, float2 localanchor) {
 
 	float radians = p.angle * (PI / 180.0f);
@@ -143,6 +172,7 @@ float2 getworldanchor(part& p, float2 localanchor) {
 
 	return world;
 }
+__device__ __host__
 void getcube( quadvertex2d& cube,float2 pos,float2 size,float rot,float3 col) {
 	cube.x = pos.x;
 	cube.y = pos.y;
@@ -155,6 +185,7 @@ void getcube( quadvertex2d& cube,float2 pos,float2 size,float rot,float3 col) {
 	cube.g = col.y;
 	cube.b = col.z;
 }
+__device__ __host__
 void getcircle(circlevertex2d& circle, float2 pos, float size, float3 col) {
 	circle.x = pos.x;
 	circle.y = pos.y;
@@ -163,6 +194,7 @@ void getcircle(circlevertex2d& circle, float2 pos, float size, float3 col) {
 	circle.g = col.y;
 	circle.b = col.z;
 }
+
 void asemblerobot(int n) {
 	for (int i = 0; i < n; i++) {
 		int k = i * 7;
@@ -196,34 +228,42 @@ void asemblerobot(int n) {
 
 	}
 }
-void regdummyquad() {
-	if (dummyQuad) {
-		quadvertex2d a = { 0 };
-		a.x = dx;
-		a.y = dy;
-		a.width = dw;
-		a.height = dh;
-		a.r = dr;
-		a.g = dg;
-		a.b = db;
-		a.rotation = drot;
+
+__global__ void d_assemblerobot(int n,body* robot,circlevertex2d* jointdata,quadvertex2d* renderdata) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= n) return;
+	int k = i * 7;
+	int c = i * 10;
+	body& b = robot[i];
 
 
-		dummyquad.push_back(a);
-		
-	}
-	if(dummyCircle) {
-		circlevertex2d c;
-		c.x = dx;
-		c.y = dy;
-		c.r = dr;
-		c.g = dg;
-		c.b = db;
-		c.size = dw;
-		dummycircle.push_back(c);
-	}
+	getcube(renderdata[k], { b.torso.pos.x,b.torso.pos.y }, { b.torso.size.x,b.torso.size.y }, b.torso.angle, { b.torso.col.x,b.torso.col.y,b.torso.col.z });
+	getcube(renderdata[k + 1], { b.leftthigh.pos.x ,b.leftthigh.pos.y }, { b.leftthigh.size.x,b.leftthigh.size.y }, b.leftthigh.angle, { b.leftthigh.col.x,b.leftthigh.col.y,b.leftthigh.col.z });
+	getcube(renderdata[k + 2], { b.rightthigh.pos.x ,b.rightthigh.pos.y }, { b.rightthigh.size.x,b.rightthigh.size.y }, b.rightthigh.angle, { b.rightthigh.col.x,b.rightthigh.col.y,b.rightthigh.col.z });
+	getcube(renderdata[k + 3], { b.leftshin.pos.x  ,b.leftshin.pos.y }, { b.leftshin.size.x,b.leftshin.size.y }, b.leftshin.angle, { b.leftshin.col.x,b.leftshin.col.y,b.leftshin.col.z });
+	getcube(renderdata[k + 4], { b.rightshin.pos.x  ,b.rightshin.pos.y }, { b.rightshin.size.x,b.rightshin.size.y }, b.rightshin.angle, { b.rightshin.col.x,b.rightshin.col.y,b.rightshin.col.z });
+	getcube(renderdata[k + 5], { b.leftfoot.pos.x  ,b.leftfoot.pos.y }, { b.leftfoot.size.x,b.leftfoot.size.y }, b.leftfoot.angle, { b.leftfoot.col.x,b.leftfoot.col.y,b.leftfoot.col.z });
+	getcube(renderdata[k + 6], { b.rightfoot.pos.x  ,b.rightfoot.pos.y }, { b.rightfoot.size.x,b.rightfoot.size.y }, b.rightfoot.angle, { b.rightfoot.col.x,b.rightfoot.col.y,b.rightfoot.col.z });
+
+	//joints
+	getcircle(jointdata[c], getworldanchor(*b.lefthip.parent, b.lefthip.parentanchor), 50.0f, { 1,1,1 });
+	getcircle(jointdata[c + 1], getworldanchor(*b.lefthip.parent, b.lefthip.parentanchor), 35.0f, { 0,0,0 });
+
+	getcircle(jointdata[c + 2], getworldanchor(*b.leftknee.parent, b.leftknee.parentanchor), 50.0f, { 1,1,1 });
+	getcircle(jointdata[c + 3], getworldanchor(*b.leftknee.parent, b.leftknee.parentanchor), 35.0f, { 0,0,0 });
+
+	getcircle(jointdata[c + 4], getworldanchor(*b.rightknee.parent, b.rightknee.parentanchor), 50.0f, { 1,1,1 });
+	getcircle(jointdata[c + 5], getworldanchor(*b.rightknee.parent, b.rightknee.parentanchor), 35.0f, { 0,0,0 });
+
+	getcircle(jointdata[c + 6], getworldanchor(*b.leftankle.parent, b.leftankle.parentanchor), 30.0f, { 1,1,1 });
+	getcircle(jointdata[c + 7], getworldanchor(*b.leftankle.parent, b.leftankle.parentanchor), 20.0f, { 0,0,0 });
+
+	getcircle(jointdata[c + 8], getworldanchor(*b.rightankle.parent, b.rightankle.parentanchor), 30.0f, { 1,1,1 });
+	getcircle(jointdata[c + 9], getworldanchor(*b.rightankle.parent, b.rightankle.parentanchor), 20.0f, { 0,0,0 });
+
 }
 
+__device__ __host__ 
 float normalizeangle(float angle)
 {
 	while (angle > 180.0f)
@@ -235,8 +275,11 @@ float normalizeangle(float angle)
 	return angle;
 }
 
-void intigratepart(part& p, float dt){
-	p.force.y =   -9.81f * p.mass;
+
+__device__ __host__ 
+void intigratepart(part& p,float dt=DT){
+
+	p.force.y =   -G * p.mass;
 	p.vel.x += (p.force.x * p.invmass) * dt;
 	p.vel.y += (p.force.y * p.invmass) * dt;
 	p.pos.x += p.vel.x * dt;
@@ -248,6 +291,7 @@ void intigratepart(part& p, float dt){
 	
 }
 
+__device__ __host__
 void getcorners(part& p, float2 corners[4]) {
 
 	float hx = p.size.x * 0.5f;
@@ -275,6 +319,7 @@ void getcorners(part& p, float2 corners[4]) {
 	}
 
 }
+__device__ __host__ 
 float getlowestpoint(part& p) {
 
 	float2 corners[4];
@@ -289,6 +334,7 @@ float getlowestpoint(part& p) {
 	}
 	return lowest;
 }
+__device__ __host__
 int getlowestcorner(part& p) {
 	float2 corners[4];
 	getcorners(p, corners);
@@ -301,12 +347,14 @@ int getlowestcorner(part& p) {
 	}
 	return lowestIndex;
 }
+__device__ __host__
 float2 getfloorcontact(part& p) {
 	float2 corners[4];
 	getcorners(p, corners);
 	int lowestIndex = getlowestcorner(p);
 	return corners[lowestIndex];	
 }
+__device__ __host__
 float2 getcontactoffset(part& p) {
 
 	float2 contact = getfloorcontact(p);
@@ -315,6 +363,7 @@ float2 getcontactoffset(part& p) {
 		contact.x - p.pos.x,
 		contact.y - p.pos.y};
 }
+__device__ __host__
 float2 getcontactvel(part& p,float2 r) {
 	float2 v;
 
@@ -322,6 +371,7 @@ float2 getcontactvel(part& p,float2 r) {
 	v.y = p.vel.y + p.angvel * r.x;
 	return v;
 }
+__device__ __host__
 float getclampedtargetangle(joint& j)
 {
 	if (j.targetangle < j.minangle)
@@ -332,6 +382,7 @@ float getclampedtargetangle(joint& j)
 
 	return j.targetangle;
 }
+__device__ __host__
 int getfloorcontacts(part& p,float2 contact[2],float floorY = 150.0f) {
 	float2 corners[4];
 	getcorners(p, corners);
@@ -349,6 +400,7 @@ int getfloorcontacts(part& p,float2 contact[2],float floorY = 150.0f) {
 	}
 	return count;
 }
+__device__ __host__
 void impulse(part& p,float2 impulse, float2 r) {
 	p.vel.x += impulse.x * p.invmass;
 	p.vel.y += impulse.y * p.invmass;
@@ -356,6 +408,7 @@ void impulse(part& p,float2 impulse, float2 r) {
 
 	p.angvel += torqueImpulse * p.invinertia;
 }
+__device__ __host__
 float solvefloorcontact(part& p, float2 contact) {
 	float2 r={
 		contact.x - p.pos.x,
@@ -383,6 +436,7 @@ float solvefloorcontact(part& p, float2 contact) {
 
 	return impulseMagnitude;
 }
+__device__ __host__
 void solvefloorfriction(part& p,float2 contact, float friction,float normalimpulse) {
 	
 	if (normalimpulse <= 0.0f) return;
@@ -405,6 +459,7 @@ void solvefloorfriction(part& p,float2 contact, float friction,float normalimpul
 
 	impulse(p, imp, r);
 }
+__device__ __host__
 void floorcolisionpart(part& p,float floorY=150.0f) {
 	
 
@@ -418,6 +473,7 @@ void floorcolisionpart(part& p,float floorY=150.0f) {
 
 	
 }
+__device__ __host__
 float2 getjointerror(joint& j)
 {
 	float2 parentworld =
@@ -431,10 +487,12 @@ float2 getjointerror(joint& j)
 		parentworld.y - childworld.y
 	};
 }
+__device__ __host__
 float getjointangle(joint& j)
 {
 	return normalizeangle(j.child->angle - j.parent->angle);
 }
+__device__ __host__
 float getjointangleerror(joint& j)
 {
 	float angle = getjointangle(j);
@@ -442,6 +500,7 @@ float getjointangleerror(joint& j)
 	return normalizeangle( target - angle);
 }
 
+__device__ __host__
 void solvecontacts(part& p) {
 	float2 contact[2];
 	int count = getfloorcontacts(p, contact);
@@ -453,6 +512,7 @@ void solvecontacts(part& p) {
 
 	}
 }
+__device__ __host__
 void solvejointmotor(joint& j) {
 	float error = getjointangleerror(j);
 
@@ -478,6 +538,7 @@ void solvejointmotor(joint& j) {
 		j.child->angvel += correction * childweight;
 
 }
+__device__ __host__
 void solvejointposition(joint& j)
 {
 	float2 parentanchor = getworldanchor(*j.parent, j.parentanchor);
@@ -605,6 +666,7 @@ void solvejointposition(joint& j)
 			impulse(*j.child, jointImpulse, rc);
 	}
 }
+__device__ __host__
 void velocitycorrection(joint& j,float angle) {
 	
 	float relativeAngVel =
@@ -657,6 +719,7 @@ void velocitycorrection(joint& j,float angle) {
 		}
 	}
 }
+__device__ __host__
 void solvejointlimits(joint& j)
 {
 	float angle = getjointangle(j);
@@ -685,10 +748,10 @@ void solvejointlimits(joint& j)
 	velocitycorrection(j, angle);
 }
 
-
-void solvejoints(int i) {
-	for (int k = 0; k < 10; k++){
-		body& b = robotdata[i];
+__device__ __host__
+void solvejoints(body& b) {
+	
+		
 	solvejointposition(b.lefthip);
 	solvejointposition(b.righthip);
 	solvejointposition(b.leftknee);
@@ -710,10 +773,11 @@ void solvejoints(int i) {
 	solvejointmotor(b.leftankle);
 	solvejointmotor(b.rightankle);
 
+
 }
-}
-void floorcolision(int i) {
-	body& b = robotdata[i];
+__device__ __host__
+void floorcolision(body& b) {
+	
 	part* parts[7] = {
 		&b.torso, &b.leftthigh, &b.rightthigh,
 		&b.leftshin, &b.rightshin, &b.leftfoot, &b.rightfoot
@@ -723,8 +787,7 @@ void floorcolision(int i) {
 		solvecontacts(*parts[p]);
 	}
 
-	// Resolve non-adjacent OBB contacts. Paired left/right limbs overlap in this
-	// sagittal 2D projection, and directly connected pieces are held by joints.
+	
 	for (int iteration = 0; iteration < 3; ++iteration) {
 		for (int aIndex = 0; aIndex < 7; ++aIndex) {
 			for (int bIndex = aIndex + 1; bIndex < 7; ++bIndex) {
@@ -874,8 +937,10 @@ void floorcolision(int i) {
 		}
 	}
 }
-void intigrate(int i, float dt) {
-	body& b = robotdata[i];
+__device__ __host__ 
+void intigrate(body& b, float dt=DT) {
+
+	
 	intigratepart(b.torso, dt);
 	intigratepart(b.leftthigh, dt);
 	intigratepart(b.rightthigh, dt);
@@ -884,34 +949,121 @@ void intigrate(int i, float dt) {
 	intigratepart(b.leftfoot, dt);
 	intigratepart(b.rightfoot, dt);
 }
+__device__ float d_tx = 0.0f;
 
+__global__ void gettx(int n, body* robot) {
+	if (blockIdx.x != 0 || threadIdx.x != 0 || n <= 0) return;
 
-void updateRobot(float dt=1/120.0f) {
-	for (int i = 0; i < robot_count; i++) {
-		intigrate(i, dt);
-		for (int iteration = 0; iteration < 3; ++iteration) {
-			solvejoints(i);
-			floorcolision(i);
-		}
+	float farthestX = robot[0].torso.pos.x;
+	for (int i = 1; i < n; ++i) {
+		farthestX = fmaxf(farthestX, robot[i].torso.pos.x);
 	}
+	d_tx = farthestX;
 }
 
-void renderRobot() {
-	updateRobot();
-	//render.quadBatch(dummyquad);
-	//render.circleBatch(dummycircle);
+__global__ void updatekernel(int n, body* b) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= n) return;
+
+	intigrate(b[i]);
+	for (int k = 0; k < itrs; k++) {
+		solvejoints(b[i]);
+		floorcolision(b[i]);
+	}
+
+}
+
+__global__ void istouching(int n, body* robot) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= n)return;
+
+	float y = getlowestpoint(robot[i].torso);
 	
-	//if (dummyQuad) {
-	//	render.quad(dx, dy, dr, dg, db, dw, dh, drot);
-	//}
-	//if (dummyCircle) {
-	//	render.circle(dx, dy, dr, dg, db, dw);
-	//}
+	if (y <= 150.0f) {
+		robot[i].torsotouchingground = true;
+	}
+	else {
+		robot[i].torsotouchingground = false;
+	}
+	printf("torso touching %d \n", robot[i].torsotouchingground);
 
-	asemblerobot(robot_count);
-	render.quadBatch(renderdata);
-	render.circleBatch(jointrenderdata);
+	y = getlowestpoint(robot[i].leftfoot);
+	if (y <= 150.0f) {
+		robot[i].leftfeettouching = true;
+	}
+	else {
+		robot[i].leftfeettouching = false;
+	}
+	printf(" left touching %d \n", robot[i].leftfeettouching);
+
+	y = getlowestpoint(robot[i].rightfoot);
+	if (y <= 150.0f) {
+		robot[i].rightfeettouching = true;
+	}
+	else {
+		robot[i].rightfeettouching = false;
+	}
+	printf("right touching %d \n", robot[i].rightfeettouching);
+}
+void updateRobot(float dt) {
+	updatekernel << <blocks(robot_count), threads >> > (robot_count, d_bodies);
+
+	gettx << <1, 1 >> > (robot_count, d_bodies);
+	cudaMemcpyFromSymbol(&tx, d_tx, sizeof(float), 0, cudaMemcpyDeviceToHost);
+	istouching << <blocks(robot_count), threads >> > (robot_count, d_bodies);
+
+
+	/*for (int i = 0; i < robot_count; i++) {
+		intigrate(robotdata[i]);
+		for (int iteration = 0; iteration < 3; ++iteration) {
+			solvejoints(robotdata[i]);
+			floorcolision(robotdata[i]);
+		}
+	}*/
+}
+void draw(int n) {
+	cudaError_t e = cudaGraphicsMapResources(1, &bodyres, 0);
+	//geterror("body mapping", e);
+	e = cudaGraphicsMapResources(1, &jointres, 0);
+	//geterror("joint mapping", e);
+	size_t bodybytes = 0;
+	size_t jointbytes = 0;
+	e = cudaGraphicsResourceGetMappedPointer((void**)&d_renderdata, &bodybytes, bodyres);
+	//geterror("body pointer mapping", e);
+	e = cudaGraphicsResourceGetMappedPointer((void**)&d_jointdata, &jointbytes, jointres);
+	//geterror("joint pointer mapping", e);
+
+	d_assemblerobot << <blocks(n), threads >> > (n, d_bodies, d_jointdata, d_renderdata);
+
+	e = cudaGraphicsUnmapResources(1, &bodyres, 0);
+	//geterror("body unmapping", e);
+	e = cudaGraphicsUnmapResources(1, &jointres, 0);
+	//geterror("joint unmapping", e);
+}
+void renderRobot() {
+	//asemblerobot(robot_count);
+	//render.quadBatch(renderdata);
+	//render.circleBatch(jointrenderdata);
+
+
+	draw(robot_count);
+	render.quadBatchInterop(robot_count*7,1);
+	render.circleBatchInterop(robot_count*10,1);
+
+
+
+
+
 }
 
 
-void freedevmem() {}
+void freedevmem() {
+	cudaFree(d_bodies);
+	cudaFree(d_jointdata);
+	cudaFree(d_renderdata);
+}
+void resetrobots() {
+
+	freedevmem();
+	initrobot(robot_count);
+}

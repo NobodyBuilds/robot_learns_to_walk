@@ -1,14 +1,18 @@
 #pragma once
 #include <vector>
 #include <cuda_runtime.h>
-#include "render.h"
 #include "norender.h"
 #define usecuda true
 #define usecpu false
 #define network true
+#define DT 1.0f/120.0f
 #define PI 3.14159265359f
+#define startx 500.0f
+#define degtorad PI/180.0f
+#define radtodeg 180.0f/PI
+#define maxjointstrength 2.0f
 inline int threads = 256;
-
+inline float dt = DT;
 //floor variables
 inline float floorx = 0.0f;
 inline float floory = 50.0f;
@@ -23,6 +27,40 @@ inline float tx = 400.0f;
 /////
 //robot variables
 // Number of independent robot instances in the environment.
+struct part {
+    float3 col;
+    float angvel, mass, inertia, invmass, invinertia, torque;
+    float angle;
+    float2 pos;
+    float2 size;
+    float2 vel;
+    float2 force;
+    bool isstatic = false;
+};
+
+struct joint {
+    part* parent;
+    part* child;
+    float2 parentanchor, childanchor;
+    float targetangle, strength;
+    float minangle, maxangle;
+};
+struct body {
+    part torso;
+    part leftthigh;
+    part rightthigh;
+    part leftshin;
+    part rightshin;
+    part leftfoot;
+    part rightfoot;
+    joint leftknee, rightknee;
+    joint leftankle, rightankle;
+    joint lefthip, righthip;
+    bool torsotouchingground;
+    bool leftfeettouching;
+    bool rightfeettouching;
+};
+inline body* d_bodies = nullptr;
 inline int robot_count =1;
 inline int sample_robot_count = 1;
 inline bool dummyQuad = false;
@@ -37,7 +75,6 @@ inline __device__ float clamp(float val, float min, float max) {
 }
 
 
-inline  float dt = 1.0f/120.0f;
 
 
 

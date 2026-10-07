@@ -1,8 +1,15 @@
 @echo off
-
+setlocal
+call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+if errorlevel 1 (
+  echo Failed to initialize the Visual Studio 2022 x64 compiler environment.
+  pause
+  exit /b 1
+)
+cd /d D:\visual_studio\ppo_robot_walk\ppo_robot_walk
 set "OUTPUT=%~dp0..\robot_walks.exe"
 for %%F in ("%OUTPUT%") do set "OUTPUT_DIR=%%~dpF"
-nvcc -std=c++17 -rdc=true -Xcompiler "/std:c++17 /MD" -o "%OUTPUT%" host.cpp render.cpp ui.cpp robot.cu  D:\glad\src\glad.c ^
+nvcc -std=c++17 -rdc=true -Xcompiler "/std:c++17 /MD" -o "%OUTPUT%" host.cpp render.cpp ui.cpp robot.cu D:\glad\src\glad.c ^
   "D:\visual_studio\imgui-1.91.1\imgui.cpp" ^
   "D:\visual_studio\imgui-1.91.1\imgui_draw.cpp" ^
   "D:\visual_studio\imgui-1.91.1\imgui_tables.cpp" ^
@@ -26,5 +33,3 @@ if errorlevel 1 (
 
 echo done
 pause
-
-

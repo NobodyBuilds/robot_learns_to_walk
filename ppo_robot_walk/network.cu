@@ -17,29 +17,24 @@
 #include "vars.h"
 #include "render.h"
 #include "network.h"
+#include "norender.h"
 
 
 
 struct device_data {
-	float targetx;
-	float targetz;
-	float maxdisttotarget;
 	int n;
 	int layers;
-
+	float invscreenh;
 };
-device_data h;
 __constant__ device_data d;
-
+device_data h;
 void setconst() {
 	h.n = robot_count;
-	h.targetx = targetx;
-	h.targetz = targetz;
-	h.maxdisttotarget = maxdisttotarget;
 	h.layers = actor_layers;
-	cudaMemcpyToSymbol(d, &h, sizeof(device_data));
-}
+	h.invscreenh = 1.0f/noRender.getScreenHeight();
 
+	cudaMemcpyToSymbol(d, &h, sizeof(device_data), 0);
+}
 void geterror(const std::string& label, cudaError_t err) {
 	static std::unordered_set<std::string> printed;
 
@@ -47,8 +42,8 @@ void geterror(const std::string& label, cudaError_t err) {
 	{
 		if (err != cudaSuccess) {
 			printf("%s error : %s \n", label.c_str(), cudaGetErrorString(err));
+			printed.insert(label);
 		}
-		printed.insert(label);
 	}
 }
 
@@ -62,21 +57,13 @@ __global__ void init_rng(curandState* state, int n, unsigned long seed) {
 }
 void allocate() {
 	int n = robot_count;
-	cudaMalloc(&d_body, n * sizeof(body));
+	cudaMalloc(&d_bodies, n * sizeof(body));
 
 	cudaMalloc(&d_rngstate, robot_count * sizeof(curandState));
 	init_rng << <1, 1 >> > (d_rngstate, robot_count, 3476);
 	printf("data allocated \n");
 }
-void setmaxdisttotarget() {
-	float dx = 0.0f - targetx;
-	float dz = 0.0f - targetz;
 
-
-	maxdisttotarget = sqrtf(dx * dx + dz * dz);
-	setconst();
-
-}
 
 //weights and netrwork
 
@@ -271,12 +258,7 @@ void save_weights() {
 }
 
 __device__ double MSE = 0.0f;
-
-
 __device__  int batchsize = 128;
-
-
-
 __device__ float leakyrelu(float x) {
 
 	//return (x > 0.f) ? x : 0.01f * x;
@@ -484,7 +466,7 @@ __device__ float tanhGaussianLogProb(float z, float action, float mean) {
 }
 __device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* buffer, int s, int ci, curandState* d_rngstate) {
 	int bidx = s * d.n + ci;
-	body b = d_body[ci];
+	//body b = d_body[ci];
 	float oldLogprob = 0.0f;
 	for (int j = 0; j < 18; j++) {
 		float mean = nodevals[antityidx(D, j, ci)];
@@ -494,7 +476,7 @@ __device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* bu
 		buffer[bidx].actionZ[j] = z;
 		oldLogprob += tanhGaussianLogProb(z, action, mean);
 	}
-	d_body[ci] = b;
+	//d_body[ci] = b;
 	buffer[bidx].old_logprob = oldLogprob;
 }
 __global__ void getlog(int n, int d, int* indices, replaybuffer* buffer, int s, float* nodevals, int nodedatasize) {
@@ -513,10 +495,10 @@ __global__ void getlog(int n, int d, int* indices, replaybuffer* buffer, int s, 
 __device__ float d_reward = 0.0f;
 __device__ float oldr = 0.0f;
 __device__ int id = 0;
-__device__ float DT = 1.0f / 120.0f;
+
 __device__ int logframe = 0;
 
-__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float winr, float feetr, float handr, float headr, float torsor, float reachr) {
+__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr, float torsor) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
@@ -679,6 +661,26 @@ __device__ float boolTofloat(bool x) {
 	if (!x)a = 0.0f;
 	return a;
 }
+
+__device__ void fill_partinput(int i, float* input, part& p) {
+	input[i] = p.pos.x;
+	input[i+1] = p.pos.y;
+	input[i+2] = p.vel.x;
+	input[i+3] = p.vel.y;
+	input[i+4] = p.angle *degtorad;
+	input[i+5] = p.angvel;
+	input[i+6] = p.mass;
+	input[i+7] = p.inertia;
+	input[i+8] = p.torque;
+
+	
+}
+__device__ void fill_jointinput(int i, float* input, joint& j) {
+	input[i] = j.targetangle * degtorad;
+	input[i + 1] = j.strength / maxjointstrength;
+}
+
+
 __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights,
 	const float* __restrict__ bias, float* nodevals, const Layer* layer, bool isactor, replaybuffer* buffer, int s, curandState* rng
 
@@ -697,76 +699,33 @@ __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights
 
 			body b = d_body[i];
 
-			float dx = d.targetx - b.positonX;
-			float dy = d.targetz - b.positonZ;
-			float dist = sqrtf(dx * dx + dy * dy);
+			
 
 
 
 
 
 
-			float input[40] = { dist / d.maxdisttotarget,
-				normalize(b.hipjoints,-30,50),
+			float input[68] = { 0 };
+			input[0] = 150.0f*d.invscreenh;
+			fill_partinput(1, input, b.torso);
+			fill_partinput(10, input, b.leftthigh);
+			fill_partinput(19, input, b.rightthigh);
+			fill_partinput(28, input, b.leftshin);
+			fill_partinput(37, input, b.rightshin);
+			fill_partinput(46, input, b.leftfoot);
+			fill_partinput(55, input, b.rightfoot);
 
+			fill_jointinput(56, input, b.lefthip);
+			fill_jointinput(58, input, b.righthip);
+			fill_jointinput(60, input, b.leftknee);
+			fill_jointinput(62, input, b.rightknee);
+			fill_jointinput(64, input, b.leftankle);
+			fill_jointinput(66, input, b.rightankle);
 
-				normalize(b.hipJointSideways,-10,45),
-				normalize(b.leftHipJointSideways,-10,45),
-				normalize(b.rightHipJointSideways,-10,45),
-				normalize(b.leftHipJointTwist,-45,45),
-				normalize(b.rightHipJointTwist,-45,45),
-
-				normalize(b.leftShoulderJoint,-60,170),
-				normalize(b.rightShoulderJoint,-60,170),
-
-				normalize(b.leftShoulderJointSideways,-90,90),
-				normalize(b.rightShoulderJointSideways,-90,90),
-
-				normalize(b.leftShoulderJointTwist,-90,90),
-				normalize(b.rightShoulderJointTwist,-90,90),
-
-				normalize(b.leftElbowJoint,0,150),
-				normalize(b.rightElbowJoint,0,150),
-
-				normalize(b.leftUpperLegJoint,-30,100),
-				normalize(b.rightUpperLegJoint,-30,100),
-
-				normalize(b.leftKneeJoint,0,140),
-				normalize(b.rightKneeJoint,0,140),
-
-				boolTofloat(b.robotHeadTouchingGround),
-
-				boolTofloat(b.robotLeftFootTouchingGround) ,
-				boolTofloat(b.robotRightFootTouchingGround) ,
-
-				boolTofloat(b.robotLeftForearmTouchingGround) ,
-				boolTofloat(b.robotRightForearmTouchingGround) ,
-
-				boolTofloat(b.robotLeftHandTouchingGround) ,
-				boolTofloat(b.robotRightHandTouchingGround) ,
-
-				boolTofloat(b.robotLeftLowerLegTouchingGround) ,
-				boolTofloat(b.robotRightLowerLegTouchingGround) ,
-
-				boolTofloat(b.robotLeftUpperArmTouchingGround) ,
-				boolTofloat(b.robotRightUpperArmTouchingGround) ,
-
-				boolTofloat(b.robotLeftUpperLegTouchingGround) ,
-				boolTofloat(b.robotRightUpperLegTouchingGround) ,
-
-				boolTofloat(b.robotPelvisTouchingGround) ,
-				boolTofloat(b.robotTorsoTouchingGround) ,
-				tanhf(b.velX / 25.0f),
-				tanhf(b.velY / 25.0f),
-				tanhf(b.velZ / 25.0f),
-				tanhf(b.angleVelX / 15.0f),
-				tanhf(b.angleVelY / 15.0f),
-				tanhf(b.angleVelZ / 15.0f),
-
-
-
-			};
-			int insize = 40;
+				
+			
+			int insize = 68;
 			if (isactor) {
 				int bidx = s * d.n + i;
 				for (int b = 0; b < insize; b++) {
@@ -782,7 +741,7 @@ __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights
 			}
 			int didx = layer[0].dIdx;
 
-			firstlayer(layer[0].Nout, i, 0, didx, 40, input, weights, bias, nodevals);
+			firstlayer(layer[0].Nout, i, 0, didx, 68, input, weights, bias, nodevals);
 		}
 		else {
 
@@ -820,7 +779,7 @@ __global__ void getdone(int n, body* b, replaybuffer* buffer, int s) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
-	if (!b[i].alive || b[i].reached) {
+	if (b[i].torsotouchingground ) {
 
 		buffer[bidx].done = true;
 	}
@@ -1007,7 +966,7 @@ void run_network() {
 
 	net(step, true);//actor forward pass
 	net(step, false);//critic forward pass
-	//updaterobot();
+	updateRobot();
 	checkdone(step);
 	reward(step);
 	float h_reward = 0.0f;
@@ -1164,7 +1123,7 @@ void initnetwork() {
 	allocatenetmem();
 	copywbtogpu();
 	allocate();
-	setmaxdisttotarget();
+	//setmaxdisttotarget();
 
 	printf("network init complete \n");
 
@@ -1185,7 +1144,7 @@ void cudafree() {
 	cudaFree(d_antity_nodevals);
 	cudaFree(d_actlayer);
 	cudaFree(d_critlayer);
-	cudaFree(d_body);
+	cudaFree(d_bodies);
 
 
 }

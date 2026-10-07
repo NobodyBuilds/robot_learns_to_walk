@@ -38,7 +38,7 @@ int main()
 
 	while(noRender.isWindowOpen())
 	{
-		noRender.updateCamera(false);
+		noRender.updateCamera(true);
 		noRender.setcamerapos(cx, cy, 0);
 		double now = glfwGetTime();
 		double frameTime = now - lastTime;
@@ -51,18 +51,19 @@ int main()
 		}
 		else {
 
+		updateRobot();
 		}
-
-		timer += dt;
+		timer += static_cast<float>(frameTime);
 		renderfloor();
 		cx = (tx<950.0f)?cx:tx;
+		cx = (tx > 0.0f) ? cx : tx+950.0f;
 		renderRobot();
 		renderUI();
 
 		if (timer >= gentime) {
-			timer = 0.0f;
+			timer -= gentime;
 			gen++;
-			//resetrobots();
+			resetrobots();
 		}
 		noRender.swapBuffers();
 
@@ -85,6 +86,8 @@ int main()
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
 	//cudafree();
+	freedevmem();
+	unregistervbo();
 
 	return 0;
 }

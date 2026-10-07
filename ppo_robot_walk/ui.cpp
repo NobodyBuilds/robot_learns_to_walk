@@ -43,15 +43,7 @@ void renderUI() {
 	
 	drawhelperui();
 	
-	ImGui::Checkbox("draw quad", &dummyQuad);
-	if (dummyQuad)dummyCircle = false;
-	ImGui::Checkbox("draw circle", &dummyCircle);
-	if (dummyCircle)dummyQuad = false;
-	if (dummyCircle || dummyQuad) {
-		if (ImGui::Button("add obj")) {
-			regdummyquad();
-		}
-	}
+	
 	//
 	//ImGui::Text("Gen: %d  rollout gen %d  buffer %d / %d  time:%f", gen, rolloutstep, step * robot_count, replaybuffersize, rollout_time);
 	//ImGui::Text("mse: %5f prev %5f ", mloss, oldmloss);
