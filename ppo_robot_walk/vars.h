@@ -2,6 +2,8 @@
 #include <vector>
 #include <cuda_runtime.h>
 #include "norender.h"
+
+
 #define usecuda true
 #define usecpu false
 #define network true
@@ -11,6 +13,18 @@
 #define degtorad PI/180.0f
 #define radtodeg 180.0f/PI
 #define maxjointstrength 2.0f
+#define inputs 79
+#define output 6
+#define maxvel 25.0f
+#define maxangvel 15.0f 
+#define maxtorque 100.0f
+#define maxmass 100.0f
+#define maxinertia 400000.0f
+#define maxdist 10000.0f
+
+
+
+
 inline int threads = 256;
 inline float dt = DT;
 //floor variables
@@ -46,6 +60,13 @@ struct joint {
     float minangle, maxangle;
 };
 struct body {
+    bool torsotouchingground;
+    bool leftfeettouching;
+    bool rightfeettouching;
+    bool alive;
+    joint leftknee, rightknee;
+    joint leftankle, rightankle;
+    joint lefthip, righthip;
     part torso;
     part leftthigh;
     part rightthigh;
@@ -53,12 +74,6 @@ struct body {
     part rightshin;
     part leftfoot;
     part rightfoot;
-    joint leftknee, rightknee;
-    joint leftankle, rightankle;
-    joint lefthip, righthip;
-    bool torsotouchingground;
-    bool leftfeettouching;
-    bool rightfeettouching;
 };
 inline body* d_bodies = nullptr;
 inline int robot_count =1;
@@ -94,8 +109,8 @@ inline float fpsCount = 0;
 inline float fps = 0;
 inline float avgFps = 0;
 inline float h_dt = 1.0f / 120.0f;
-inline int inputs = 40;
-inline int output = 18;
+//inline const int inputs = 71;
+//inline const int output = 6;
 inline int actor_layers;
 inline int critic_layers;
 inline int rollout_epoch = 2;
@@ -104,7 +119,7 @@ inline bool training = false;
 inline bool run_ai = false;
 
 struct replaybuffer {
-	float s1[40];
+	float s1[inputs];
 
 	float reward;
 	float logprob;
@@ -112,8 +127,8 @@ struct replaybuffer {
 	float value;
 	float rtg;
 	float advantage;
-	float action[18];
-	float actionZ[18];
+	float action[output];
+	float actionZ[output];
 
 	bool done;
 };
@@ -166,7 +181,7 @@ inline int blocks(int n) {
 //rewards  
 inline float alive = 1.0f;
 inline float dead = -10.0f;
-
+inline float feettouching = 0.0f;
 
 
 

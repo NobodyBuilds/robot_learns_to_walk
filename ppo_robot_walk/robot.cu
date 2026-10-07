@@ -46,7 +46,7 @@ void initjoint(part* parent, part* child, float2 parentanchor, float2 childancho
 	j.parentanchor = parentanchor;
 	j.childanchor = childanchor;
 	j.targetangle = 0.0f;
-	j.strength = 0.0f;
+	j.strength = 1.0f;
 	j.minangle = minmax.x	;
 	j.maxangle = minmax.y;
 }
@@ -89,26 +89,24 @@ __global__ void d_setrobotdata(int n, body* robotdata) {
 
 
 }
-__global__ void resetrobotidxkernel(int idx, body* robotdata) {
-	int i = idx;
-	initpart({ 500.0f,520.0f }, { 200,70 }, { 0,1,0 }, 100.0f, robotdata[i].torso);
-	initpart({ 500.0f,410.0f }, { 40,150 }, { 1,0,0 }, 50.0f, robotdata[i].leftthigh);
-	initpart({ 500.0f,410.0f }, { 40,150 }, { 1,0,0 }, 50.0f, robotdata[i].rightthigh);
-	initpart({ 500.0f,260.0f }, { 40,150 }, { 0,0,1 }, 30.0f, robotdata[i].leftshin);
-	initpart({ 500.0f,260.0f }, { 40,150 }, { 0,0,1 }, 30.0f, robotdata[i].rightshin);
-	initpart({ 500.0f,185.0f }, { 80,40 }, { 1,1,0 }, 20.0f, robotdata[i].leftfoot);
-	initpart({ 500.0f,185.0f }, { 80,40 }, { 1,1,0 }, 20.0f, robotdata[i].rightfoot);
-	initjoint(&robotdata[i].torso, &robotdata[i].leftthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata[i].lefthip);
-	initjoint(&robotdata[i].torso, &robotdata[i].rightthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata[i].righthip);
-	initjoint(&robotdata[i].leftthigh, &robotdata[i].leftshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].leftknee);
-	initjoint(&robotdata[i].rightthigh, &robotdata[i].rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].rightknee);
-	initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata[i].leftankle);
-	initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata[i].rightankle);
+__device__ void resetrobotidxkernel( body& robotdata) {
+	
+	initpart({ 500.0f,520.0f }, { 200,70 }, { 0,1,0 }, 100.0f, robotdata.torso);
+	initpart({ 500.0f,410.0f }, { 40,150 }, { 1,0,0 }, 50.0f, robotdata.leftthigh);
+	initpart({ 500.0f,410.0f }, { 40,150 }, { 1,0,0 }, 50.0f, robotdata.rightthigh);
+	initpart({ 500.0f,260.0f }, { 40,150 }, { 0,0,1 }, 30.0f, robotdata.leftshin);
+	initpart({ 500.0f,260.0f }, { 40,150 }, { 0,0,1 }, 30.0f, robotdata.rightshin);
+	initpart({ 500.0f,185.0f }, { 80,40 }, { 1,1,0 }, 20.0f, robotdata.leftfoot);
+	initpart({ 500.0f,185.0f }, { 80,40 }, { 1,1,0 }, 20.0f, robotdata.rightfoot);
+	initjoint(&robotdata.torso, &robotdata.leftthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata.lefthip);
+	initjoint(&robotdata.torso, &robotdata.rightthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata.righthip);
+	initjoint(&robotdata.leftthigh, &robotdata.leftshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata.leftknee);
+	initjoint(&robotdata.rightthigh, &robotdata.rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata.rightknee);
+	initjoint(&robotdata.leftshin, &robotdata.leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata.leftankle);
+	initjoint(&robotdata.rightshin, &robotdata.rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata.rightankle);
 
 }
-void resetrobotidx(int idx) {
-	resetrobotidxkernel<<<1, 1>>>(idx, d_bodies);
-}
+
 static cudaGraphicsResource_t bodyres = nullptr;
 static cudaGraphicsResource_t jointres = nullptr;
 
@@ -281,11 +279,15 @@ void intigratepart(part& p,float dt=DT){
 
 	p.force.y =   -G * p.mass;
 	p.vel.x += (p.force.x * p.invmass) * dt;
+	p.vel.x = clamp(p.vel.x, -maxvel, maxvel);
 	p.vel.y += (p.force.y * p.invmass) * dt;
+	p.vel.y = clamp(p.vel.y, -maxvel, maxvel);
 	p.pos.x += p.vel.x * dt;
 	p.pos.y += p.vel.y * dt;
+	p.torque = clamp(p.torque, -maxtorque, maxtorque);
 	p.angvel += (p.torque * p.invinertia) * dt;
 	p.angvel *= 0.999f;
+	p.angvel = clamp(p.angvel, -maxangvel, maxangvel);
 	p.angle += p.angvel * dt * (180.0f / PI);
 	p.angle = normalizeangle(p.angle);
 	

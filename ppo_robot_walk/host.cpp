@@ -51,7 +51,7 @@ int main()
 		}
 		else {
 
-		updateRobot();
+	 	updateRobot();
 		}
 		timer += static_cast<float>(frameTime);
 		renderfloor();

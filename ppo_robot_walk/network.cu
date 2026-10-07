@@ -265,7 +265,7 @@ __device__ float leakyrelu(float x) {
 	return tanhf(x);
 
 }
-__device__ __forceinline__ void firstlayer(int n, int ci, int w, int D, int inputs, float* input, const float* __restrict__ weights, const float* __restrict__ bias, float* nodevals) {
+__device__ __forceinline__ void firstlayer(int n, int ci, int w, int D, int Inputs, float* input, const float* __restrict__ weights, const float* __restrict__ bias, float* nodevals) {
 
 	for (int i = 0; i < n; i++) {
 
@@ -431,32 +431,33 @@ __device__ float sigmoid(float x) {
 	return  1.0f / (1.0f + expf(-x));
 
 }
-__device__ float actionTarget(int j, float action) {
+
+
+__device__ float actionTarget(int j, float action,body& p) {
 	float lo = 0.0f;
 	float hi = 0.0f;
 	switch (j) {
-	case 0: lo = -30.0f; hi = 50.0f; break;
-	case 1: lo = -10.0f; hi = 45.0f; break;
-	case 2: lo = 0.0f; hi = 150.0f; break;
-	case 3: lo = 0.0f; hi = 150.0f; break;
-	case 4: lo = -10.0f; hi = 45.0f; break;
-	case 5: lo = -10.0f; hi = 45.0f; break;
-	case 6: lo = -45.0f; hi = 45.0f; break;
-	case 7: lo = -45.0f; hi = 45.0f; break;
-	case 8: lo = 0.0f; hi = 140.0f; break;
-	case 9: lo = 0.0f; hi = 140.0f; break;
-	case 10: lo = -60.0f; hi = 170.0f; break;
-	case 11: lo = -60.0f; hi = 170.0f; break;
-	case 12: lo = -90.0f; hi = 90.0f; break;
-	case 13: lo = -90.0f; hi = 90.0f; break;
-	case 14: lo = -90.0f; hi = 90.0f; break;
-	case 15: lo = -90.0f; hi = 90.0f; break;
-	case 16: lo = -30.0f; hi = 100.0f; break;
-	case 17: lo = -30.0f; hi = 100.0f; break;
+	case 0: lo = p.lefthip.minangle; hi = p.lefthip.maxangle; break;
+	case 1: lo = p.righthip.minangle; hi = p.righthip.maxangle; break;
+	case 2: lo = p.leftknee.minangle; hi = p.leftknee.maxangle; break;
+	case 3: lo = p.rightknee.minangle; hi = p.rightknee.maxangle; break;
+	case 4: lo = p.leftankle.minangle; hi = p.leftankle.maxangle; break;
+	case 5: lo = p.rightankle.minangle; hi = p.rightankle.maxangle; break;
+	
 	}
-	return lo + 0.5f * (action + 1.0f) * (hi - lo);
+	return (lo*degtorad) + 0.5f * (action + 1.0f) * ((hi*degtorad) - (lo*degtorad));
 }
-
+__device__ void setJointAction(body& b, int j, float value) {
+	switch (j) {
+	case 0: b.lefthip.targetangle = value *radtodeg; break;
+	case 1: b.righthip.targetangle = value *radtodeg; break;
+	case 2: b.leftknee.targetangle = value *radtodeg; break;
+	case 3: b.rightknee.targetangle = value *radtodeg; break;
+	case 4: b.leftankle.targetangle = value *radtodeg; break;
+	case 5: b.rightankle.targetangle = value *radtodeg; break;
+	
+	}
+}
 __device__ float tanhGaussianLogProb(float z, float action, float mean) {
 	float diff = z - mean;
 	return -0.5f * diff * diff / (ACTION_SIGMA * ACTION_SIGMA)
@@ -466,17 +467,20 @@ __device__ float tanhGaussianLogProb(float z, float action, float mean) {
 }
 __device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* buffer, int s, int ci, curandState* d_rngstate) {
 	int bidx = s * d.n + ci;
-	//body b = d_body[ci];
+	body b = d_body[ci];
 	float oldLogprob = 0.0f;
-	for (int j = 0; j < 18; j++) {
+	for (int j = 0; j < output; j++) {
 		float mean = nodevals[antityidx(D, j, ci)];
 		float z = mean + ACTION_SIGMA * curand_normal(&d_rngstate[ci]);
 		float action = tanhf(z);
 		buffer[bidx].action[j] = action;
 		buffer[bidx].actionZ[j] = z;
+		float value = actionTarget(j, action);
+		setJointAction(b, j,value );
+
 		oldLogprob += tanhGaussianLogProb(z, action, mean);
 	}
-	//d_body[ci] = b;
+	d_body[ci] = b;
 	buffer[bidx].old_logprob = oldLogprob;
 }
 __global__ void getlog(int n, int d, int* indices, replaybuffer* buffer, int s, float* nodevals, int nodedatasize) {
@@ -486,7 +490,7 @@ __global__ void getlog(int n, int d, int* indices, replaybuffer* buffer, int s, 
 	int off = b * nodedatasize;
 	int bidx = indices[s * batchsize + b];
 	float logprob = 0.0f;
-	for (int j = 0; j < 18; j++) {
+	for (int j = 0; j < output; j++) {
 		float mean = nodevals[off + d + j];
 		logprob += tanhGaussianLogProb(buffer[bidx].actionZ[j], buffer[bidx].action[j], mean);
 	}
@@ -498,52 +502,28 @@ __device__ int id = 0;
 
 __device__ int logframe = 0;
 
-__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr, float torsor) {
+__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
 
 	body c = d_body[i];
 	float alivereward = aliver;
-	if (!c.alive)alivereward = deadr;
-	float dx = c.positonX - d.targetx;
-	float dy = c.positonZ - d.targetz;
-	float curdist = sqrtf(dx * dx + dy * dy);
-	float reached = c.reached ? winr : 0.0f;
-
-
-	float progressreward = reachr * (1.0f - (curdist / d.maxdisttotarget));
-
-	float a = 0.0f;
-	if (c.robotLeftFootTouchingGround || c.robotRightFootTouchingGround) {
-		a = feetr;
-	}
-	float b = 0.0f;
-	if (c.robotHeadTouchingGround) {
-		b = headr;
-	}
-	float C = 0.0f;
-	if (c.robotTorsoTouchingGround) {
-		C = torsor;
-	}
-	float d = 0.0f;
-	if (c.robotLeftHandTouchingGround || c.robotRightHandTouchingGround) {
-		d = torsor;
-	}
-	float knee = 0.0f;
-	if (c.robotLeftLowerLegTouchingGround || c.robotRightLowerLegTouchingGround) {
-		knee = -1.0f;
-	}
-
-	float reward = progressreward + alivereward + reached + a + b + C + d + knee + c.positionY;
+	
+	float dead = d_body[i].alive ? 0.0f : deadr;
+	float feet = (d_body[i].leftfeettouching || d_body[i].rightfeettouching) ? feetr : 0.0f;
+	float dist = d_body[i].torso.pos.x - 500.0f;
+	float sum = -dead + feet + alivereward + dist;
+	float reward =sum;
 
 
 	buffer[bidx].reward = reward;
 
 	atomicAdd(&d_reward, reward);
-	if (!c.alive || c.reached) {
-
+	if (!d_body[i].alive) {
+		resetrobotidxkernel(d_body[i]);
 	}
+	
 
 }
 __device__ void getQvalue(int s, int c, int D, float* nodevals, replaybuffer* buffer) {
@@ -621,8 +601,8 @@ __global__ void firstlayerfrozen(int n, int s, int* indices, const float* __rest
 
 
 	float x = bias[idx(0, i)];
-	for (int k = 0; k < 40; k++) {
-		x += buffer[indices[s * batchsize + b]].s1[k] * weights[idx(0 + i * 40, k)];
+	for (int k = 0; k < inputs; k++) {
+		x += buffer[indices[s * batchsize + b]].s1[k] * weights[idx(0 + i * inputs, k)];
 
 	}
 	int off = b * nodedatasize + i;
@@ -656,27 +636,25 @@ __device__ float normalize(float x, float max, float min) {
 	//[-1,1] bounded for better normalization for values in a rnage
 }
 __device__ float boolTofloat(bool x) {
-	float a = 0.0f;
-	if (x)a = 1.0f;
-	if (!x)a = 0.0f;
-	return a;
+	
+	return x ? 1.0f : 0.0f;
 }
 
 __device__ void fill_partinput(int i, float* input, part& p) {
-	input[i] = p.pos.x;
-	input[i+1] = p.pos.y;
-	input[i+2] = p.vel.x;
-	input[i+3] = p.vel.y;
-	input[i+4] = p.angle *degtorad;
-	input[i+5] = p.angvel;
-	input[i+6] = p.mass;
-	input[i+7] = p.inertia;
-	input[i+8] = p.torque;
+	input[i] = normalize(p.pos.x-500.0f,maxdist,-maxdist);
+	input[i+1] = normalize(p.pos.y,1200.0f,-1200.0f);
+	input[i+2] = normalize(p.vel.x,maxvel,-maxvel);
+	input[i+3] = normalize(p.vel.y, maxvel, -maxvel);
+	input[i+4] = p.angle /180.0f;
+	input[i+5] = normalize(p.angvel,maxangvel,-maxangvel);
+	input[i+6] = p.mass/ maxmass;
+	input[i+7] = p.inertia/maxinertia;
+	input[i+8] = p.torque/ maxtorque;
 
 	
 }
 __device__ void fill_jointinput(int i, float* input, joint& j) {
-	input[i] = j.targetangle * degtorad;
+	input[i] = normalize(j.targetangle,j.maxangle,j.minangle);
 	input[i + 1] = j.strength / maxjointstrength;
 }
 
@@ -706,8 +684,8 @@ __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights
 
 
 
-			float input[68] = { 0 };
-			input[0] = 150.0f*d.invscreenh;
+			float input[inputs] = { 0 };
+			input[0] = 0.125f;
 			fill_partinput(1, input, b.torso);
 			fill_partinput(10, input, b.leftthigh);
 			fill_partinput(19, input, b.rightthigh);
@@ -716,16 +694,20 @@ __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights
 			fill_partinput(46, input, b.leftfoot);
 			fill_partinput(55, input, b.rightfoot);
 
-			fill_jointinput(56, input, b.lefthip);
-			fill_jointinput(58, input, b.righthip);
-			fill_jointinput(60, input, b.leftknee);
-			fill_jointinput(62, input, b.rightknee);
-			fill_jointinput(64, input, b.leftankle);
-			fill_jointinput(66, input, b.rightankle);
+			fill_jointinput(64, input, b.lefthip);
+			fill_jointinput(66, input, b.righthip);
+			fill_jointinput(68, input, b.leftknee);
+			fill_jointinput(70, input, b.rightknee);
+			fill_jointinput(72, input, b.leftankle);
+			fill_jointinput(74, input, b.rightankle);
+			input[76] = boolTofloat(b.leftfeettouching);
+				input[77] = boolTofloat(b.rightfeettouching);
+				input[78] = boolTofloat(b.torsotouchingground);
+
 
 				
 			
-			int insize = 68;
+			int insize = inputs;
 			if (isactor) {
 				int bidx = s * d.n + i;
 				for (int b = 0; b < insize; b++) {
@@ -741,7 +723,7 @@ __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights
 			}
 			int didx = layer[0].dIdx;
 
-			firstlayer(layer[0].Nout, i, 0, didx, 68, input, weights, bias, nodevals);
+			firstlayer(layer[0].Nout, i, 0, didx, inputs, input, weights, bias, nodevals);
 		}
 		else {
 
@@ -782,16 +764,18 @@ __global__ void getdone(int n, body* b, replaybuffer* buffer, int s) {
 	if (b[i].torsotouchingground ) {
 
 		buffer[bidx].done = true;
+		b[i].alive = false;
 	}
 	else {
 		buffer[bidx].done = false;
+		b[i].alive = true;
 	}
 
 }
 
 
 void checkdone(int step) {
-	getdone << <blocks(robot_count), threads >> > (robot_count, d_body, d_state, step);
+	getdone << <blocks(robot_count), threads >> > (robot_count, d_bodies, d_state, step);
 }
 void normalize_advantages() {
 
@@ -865,7 +849,7 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 
 }
 void reward(int s) {
-	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_body, alive, dead, win, feettouching, handtouching, headtouching, torsotouching, reachtarget);
+	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, alive, dead,  feettouching);
 
 
 
@@ -953,10 +937,10 @@ void frozennet(bool isactor) {
 void net(int s, bool isactor) {
 
 	if (isactor) {
-		netkernel << <blocks(robot_count), threads >> > (robot_count, d_body, d_actor_weights, d_actor_bias, d_antity_nodevals, d_actlayer, isactor, d_state, s, d_rngstate);
+		netkernel << <blocks(robot_count), threads >> > (robot_count, d_bodies, d_actor_weights, d_actor_bias, d_antity_nodevals, d_actlayer, isactor, d_state, s, d_rngstate);
 	}
 	else {
-		netkernel << <blocks(robot_count), threads >> > (robot_count, d_body, d_critic_weights, d_critic_bias, d_antity_nodevals, d_critlayer, isactor, d_state, s, d_rngstate);
+		netkernel << <blocks(robot_count), threads >> > (robot_count, d_bodies, d_critic_weights, d_critic_bias, d_antity_nodevals, d_critlayer, isactor, d_state, s, d_rngstate);
 
 	}
 
@@ -1106,7 +1090,7 @@ void restart() {
 	actor_layers = 0;
 	critic_layers = 0;
 
-	initrobot();
+	initrobot(robot_count);
 
 	initnetwork();
 	printf("network initialized \n");

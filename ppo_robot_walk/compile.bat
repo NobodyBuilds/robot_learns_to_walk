@@ -9,7 +9,7 @@ if errorlevel 1 (
 cd /d D:\visual_studio\ppo_robot_walk\ppo_robot_walk
 set "OUTPUT=%~dp0..\robot_walks.exe"
 for %%F in ("%OUTPUT%") do set "OUTPUT_DIR=%%~dpF"
-nvcc -std=c++17 -rdc=true -Xcompiler "/std:c++17 /MD" -o "%OUTPUT%" host.cpp render.cpp ui.cpp robot.cu D:\glad\src\glad.c ^
+nvcc -std=c++17 -rdc=true -Xcompiler "/std:c++17 /MD" -o "%OUTPUT%" host.cpp render.cpp ui.cpp robot.cu network.cu D:\glad\src\glad.c ^
   "D:\visual_studio\imgui-1.91.1\imgui.cpp" ^
   "D:\visual_studio\imgui-1.91.1\imgui_draw.cpp" ^
   "D:\visual_studio\imgui-1.91.1\imgui_tables.cpp" ^

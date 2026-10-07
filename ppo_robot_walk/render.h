@@ -14,7 +14,7 @@ void updateRobot(float dt= DT);
 void renderRobot();
 void resetrobots();
 void freedevmem();
-void resetrobotidx(int idx);
 void registervbo(int n);
 void unregistervbo();
+__device__ void resetrobotidxkernel(body& robotdata);
 
