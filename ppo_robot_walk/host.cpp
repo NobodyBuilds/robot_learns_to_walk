@@ -26,8 +26,9 @@ int main()
 	const char* glsl_version = "#version 330";
 	ImGui_ImplOpenGL3_Init(glsl_version);
 	noRender.movementSpeed = 20.0f;
+	//registervbo(robot_count);
 	initrobot(robot_count);
-	//initnetwork();
+	initnetwork();
 	initfloor();
 	double lastTime = glfwGetTime();
 	double fpsClock = lastTime;
@@ -47,7 +48,7 @@ int main()
 		noRender.pollEvents();
 		noRender.clearScreen(br, bg, bb);
 		if (run_ai) {
-			//run_network();
+			run_network();
 		}
 		else {
 

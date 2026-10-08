@@ -38,6 +38,7 @@ void initpart(float2 pos, float2 size, float3 col,float mass, part& p) {
 	p.invinertia = 1.0f / p.inertia;
 	p.torque = 0.0f;
 	p.angvel = 0.0f;
+	p.isstatic = false;
 }
 __device__ __host__
 void initjoint(part* parent, part* child, float2 parentanchor, float2 childanchor,float2 minmax,  joint& j) {
@@ -46,7 +47,7 @@ void initjoint(part* parent, part* child, float2 parentanchor, float2 childancho
 	j.parentanchor = parentanchor;
 	j.childanchor = childanchor;
 	j.targetangle = 0.0f;
-	j.strength = 1.0f;
+	j.strength = 0.0f;
 	j.minangle = minmax.x	;
 	j.maxangle = minmax.y;
 }
@@ -86,11 +87,15 @@ __global__ void d_setrobotdata(int n, body* robotdata) {
 	initjoint(&robotdata[i].rightthigh, &robotdata[i].rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].rightknee);
 	initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata[i].leftankle);
 	initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata[i].rightankle);
+	robotdata[i].alive = true;
+	robotdata[i].torsotouchingground = false;
+	robotdata[i].leftfeettouching = false;
+	robotdata[i].rightfeettouching = false;
 
 
 }
 __device__ void resetrobotidxkernel( body& robotdata) {
-	
+	body& b = robotdata;
 	initpart({ 500.0f,520.0f }, { 200,70 }, { 0,1,0 }, 100.0f, robotdata.torso);
 	initpart({ 500.0f,410.0f }, { 40,150 }, { 1,0,0 }, 50.0f, robotdata.leftthigh);
 	initpart({ 500.0f,410.0f }, { 40,150 }, { 1,0,0 }, 50.0f, robotdata.rightthigh);
@@ -104,7 +109,10 @@ __device__ void resetrobotidxkernel( body& robotdata) {
 	initjoint(&robotdata.rightthigh, &robotdata.rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata.rightknee);
 	initjoint(&robotdata.leftshin, &robotdata.leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata.leftankle);
 	initjoint(&robotdata.rightshin, &robotdata.rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata.rightankle);
-
+	b.leftfeettouching = false;
+	b.rightfeettouching = false;
+	b.torsotouchingground = false;
+	
 }
 
 static cudaGraphicsResource_t bodyres = nullptr;
@@ -125,6 +133,8 @@ void registervbo(int n) {
 //	geterror("body register buffer", err);
 	 err = cudaGraphicsGLRegisterBuffer(&jointres, id2, cudaGraphicsRegisterFlagsWriteDiscard);
 	// geterror("joint register buffer", err);
+
+	// printf("vbo registered \n");
 }
 void unregistervbo() {
 
@@ -144,12 +154,21 @@ void initrobot(int n) {
 //	jointrenderdata.resize(n* 10);
 	//robotdata.resize(n);
 	registervbo(n);
-	cudaMalloc(&d_bodies, n * sizeof(body));
-	cudaMalloc(&d_jointdata, n* 10 * sizeof(circlevertex2d));
-	cudaMalloc(&d_renderdata, n*7 * sizeof(quadvertex2d));
+	cudaError_t err= cudaMalloc(&d_bodies, n * sizeof(body));
+	if (err !=cudaSuccess) {
+		printf("body malloc failed %s", cudaGetErrorString(err));
+	}
+	err= cudaMalloc(&d_jointdata, n* 10 * sizeof(circlevertex2d));
+	if (err !=cudaSuccess) {
+		printf("joint malloc failed %s", cudaGetErrorString(err));
+	}
+	err =cudaMalloc(&d_renderdata, n*7 * sizeof(quadvertex2d));
+	if (err !=cudaSuccess) {
+		printf("renderdata malloc failed %s", cudaGetErrorString(err));
+	}
 
 	d_setrobotdata<<<blocks(n),threads >> >(n, d_bodies);
-	
+	//printf("robot initilized \n");
 	
 	
 }
@@ -987,7 +1006,6 @@ __global__ void istouching(int n, body* robot) {
 	else {
 		robot[i].torsotouchingground = false;
 	}
-	printf("torso touching %d \n", robot[i].torsotouchingground);
 
 	y = getlowestpoint(robot[i].leftfoot);
 	if (y <= 150.0f) {
@@ -996,7 +1014,6 @@ __global__ void istouching(int n, body* robot) {
 	else {
 		robot[i].leftfeettouching = false;
 	}
-	printf(" left touching %d \n", robot[i].leftfeettouching);
 
 	y = getlowestpoint(robot[i].rightfoot);
 	if (y <= 150.0f) {
@@ -1005,7 +1022,6 @@ __global__ void istouching(int n, body* robot) {
 	else {
 		robot[i].rightfeettouching = false;
 	}
-	printf("right touching %d \n", robot[i].rightfeettouching);
 }
 void updateRobot(float dt) {
 	updatekernel << <blocks(robot_count), threads >> > (robot_count, d_bodies);

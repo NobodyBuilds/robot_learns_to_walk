@@ -37,9 +37,12 @@ void renderUI() {
 	}
 	ImGui::Spacing();
 	
-	if (ImGui::InputInt("num robots", &sample_robot_count, 1, 100)) {
-	restart();
+	ImGui::InputInt("num robots", &sample_robot_count, 1, 100);
+	if (ImGui::Button("restart")) {
+		restart();
 	}
+	
+	
 	ImGui::Spacing();
 
 	
@@ -55,8 +58,11 @@ void renderUI() {
 	ImGui::DragFloat("alive reward", &alive, 0.01f, 0.0f, 100.0f);
 	ImGui::DragFloat("dead reward", &dead, 0.01f, 0.0f, 100.0f);
 	ImGui::DragFloat("feet reward", &feettouching, 0.01f, 0.0f, 100.0f);
+	ImGui::DragFloat("dist reward", &distr, 0.01f, 0.0f, 100.0f);
+	ImGui::DragFloat("straight reward", &yup, 0.01f, 0.0f, 100.0f);
 
 	//ImGui::Separator();
+	ImGui::Spacing();
 	ImGui::Spacing();
 	
 

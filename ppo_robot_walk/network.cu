@@ -56,8 +56,8 @@ __global__ void init_rng(curandState* state, int n, unsigned long seed) {
 	}
 }
 void allocate() {
-	int n = robot_count;
-	cudaMalloc(&d_bodies, n * sizeof(body));
+	
+	
 
 	cudaMalloc(&d_rngstate, robot_count * sizeof(curandState));
 	init_rng << <1, 1 >> > (d_rngstate, robot_count, 3476);
@@ -243,7 +243,7 @@ void save_weights() {
 	cudaMemcpy(critic_bias.data(), d_critic_bias, critic_biassize * sizeof(float), cudaMemcpyDeviceToHost);
 	cudaError_t err = cudaGetLastError();
 	if (err) {
-		printf(" memcpy grom device to save weights failed %s \n", cudaGetErrorString(err));
+		printf(" memcpy from device to save weights failed %s \n", cudaGetErrorString(err));
 	}
 	std::remove("modeldata/actorweights.txt");
 	std::remove("modeldata/criticweights.txt");
@@ -261,8 +261,8 @@ __device__ double MSE = 0.0f;
 __device__  int batchsize = 128;
 __device__ float leakyrelu(float x) {
 
-	//return (x > 0.f) ? x : 0.01f * x;
-	return tanhf(x);
+	return (x > 0.f) ? x : 0.01f * x;
+	//return tanhf(x);
 
 }
 __device__ __forceinline__ void firstlayer(int n, int ci, int w, int D, int Inputs, float* input, const float* __restrict__ weights, const float* __restrict__ bias, float* nodevals) {
@@ -437,15 +437,21 @@ __device__ float actionTarget(int j, float action,body& p) {
 	float lo = 0.0f;
 	float hi = 0.0f;
 	switch (j) {
-	case 0: lo = p.lefthip.minangle; hi = p.lefthip.maxangle; break;
-	case 1: lo = p.righthip.minangle; hi = p.righthip.maxangle; break;
-	case 2: lo = p.leftknee.minangle; hi = p.leftknee.maxangle; break;
-	case 3: lo = p.rightknee.minangle; hi = p.rightknee.maxangle; break;
-	case 4: lo = p.leftankle.minangle; hi = p.leftankle.maxangle; break;
-	case 5: lo = p.rightankle.minangle; hi = p.rightankle.maxangle; break;
+	case 0: lo = degtorad* p.lefthip.minangle; hi = degtorad * p.lefthip.maxangle; break;
+	case 1: lo = degtorad* p.righthip.minangle; hi = degtorad * p.righthip.maxangle; break;
+	case 2: lo = degtorad* p.leftknee.minangle; hi = degtorad * p.leftknee.maxangle; break;
+	case 3: lo = degtorad* p.rightknee.minangle; hi = degtorad * p.rightknee.maxangle; break;
+	case 4: lo = degtorad* p.leftankle.minangle; hi = degtorad * p.leftankle.maxangle; break;
+	case 5: lo = degtorad* p.rightankle.minangle; hi = degtorad * p.rightankle.maxangle; break;
+	case 6: lo = 0.0f; hi = 1.0f; break;
+	case 7: lo = 0.0f; hi = 1.0f; break;
+	case 8: lo = 0.0f; hi = 1.0f; break;
+	case 9: lo = 0.0f; hi = 1.0f; break;
+	case 10: lo = 0.0f; hi = 1.0f; break;
+	case 11: lo = 0.0f; hi = 1.0f; break;
 	
 	}
-	return (lo*degtorad) + 0.5f * (action + 1.0f) * ((hi*degtorad) - (lo*degtorad));
+	return (lo) + 0.5f * (action + 1.0f) * ((hi) - (lo));
 }
 __device__ void setJointAction(body& b, int j, float value) {
 	switch (j) {
@@ -455,6 +461,13 @@ __device__ void setJointAction(body& b, int j, float value) {
 	case 3: b.rightknee.targetangle = value *radtodeg; break;
 	case 4: b.leftankle.targetangle = value *radtodeg; break;
 	case 5: b.rightankle.targetangle = value *radtodeg; break;
+	case 6: b.lefthip.strength = value * maxjointstrength; break;
+	case 7: b.righthip.strength = value * maxjointstrength; break;
+	case 8: b.leftknee.strength = value * maxjointstrength; break;
+	case 9: b.rightknee.strength = value * maxjointstrength; break;
+	case 10: b.leftankle.strength = value * maxjointstrength; break;
+	case 11: b.rightankle.strength = value * maxjointstrength; break;
+
 	
 	}
 }
@@ -475,8 +488,8 @@ __device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* bu
 		float action = tanhf(z);
 		buffer[bidx].action[j] = action;
 		buffer[bidx].actionZ[j] = z;
-		float value = actionTarget(j, action);
-		setJointAction(b, j,value );
+		float value = actionTarget(j, action,b);
+		setJointAction(b, j, value);
 
 		oldLogprob += tanhGaussianLogProb(z, action, mean);
 	}
@@ -502,18 +515,20 @@ __device__ int id = 0;
 
 __device__ int logframe = 0;
 
-__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr) {
+__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr,float distr,float yr) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
 
-	body c = d_body[i];
-	float alivereward = aliver;
+
+
 	
-	float dead = d_body[i].alive ? 0.0f : deadr;
+	float dead = d_body[i].alive ? aliver : -deadr;
+
 	float feet = (d_body[i].leftfeettouching || d_body[i].rightfeettouching) ? feetr : 0.0f;
-	float dist = d_body[i].torso.pos.x - 500.0f;
-	float sum = -dead + feet + alivereward + dist;
+	float dist = ((d_body[i].torso.pos.x - 500.0f) / maxdist)*distr;
+	float straight = (d_body[i].torso.pos.y / 335.0f) * yr;//335.0f is robot height from torso to feet
+	float sum = dead + feet + straight + dist;
 	float reward =sum;
 
 
@@ -849,7 +864,7 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 
 }
 void reward(int s) {
-	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, alive, dead,  feettouching);
+	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, alive, dead,  feettouching,distr,yup);
 
 
 
@@ -1017,63 +1032,86 @@ void shuffleindices() {
 }
 
 void allocatenetmem() {
-	cudaMalloc(&d_actor_weights, actor_weightbuffersize * sizeof(float));
-	cudaMalloc(&d_critic_weights, critic_weightbuffersize * sizeof(float));
-	cudaMalloc(&d_actor_bias, actor_biassize * sizeof(float));
-	cudaMalloc(&d_critic_bias, critic_biassize * sizeof(float));
-	cudaMalloc(&d_actor_nodvals, hbatchsize * actor_nodedatasize * sizeof(float));
-	cudaMalloc(&d_critic_nodvals, hbatchsize * critic_nodedatasize * sizeof(float));
-	cudaMalloc(&d_actor_preact, hbatchsize * actor_nodedatasize * sizeof(float));
-	cudaMalloc(&d_critic_preact, hbatchsize * critic_nodedatasize * sizeof(float));
-	cudaMalloc(&d_actor_delta, hbatchsize * actor_nodedatasize * sizeof(float));
-	cudaMalloc(&d_critic_delta, hbatchsize * critic_nodedatasize * sizeof(float));
-	cudaMalloc(&d_state, replaybuffersize * sizeof(replaybuffer));
-	cudaMalloc(&d_indices, replaybuffersize * sizeof(int));
-	cudaMalloc(&d_antity_nodevals, antitynodesize * sizeof(float));
-	cudaMalloc(&d_actlayer, actor_layers * sizeof(Layer));
-	cudaMalloc(&d_critlayer, critic_layers * sizeof(Layer));
-	cudaMalloc(&actor_adam_weights, actor_weightbuffersize * sizeof(float2));
-	cudaMalloc(&actor_adam_bias, actor_biassize * sizeof(float2));
-	cudaMalloc(&critic_adam_weights, critic_weightbuffersize * sizeof(float2));
-	cudaMalloc(&critic_adam_bias, critic_biassize * sizeof(float2));
+	cudaError_t err;
+	err= cudaMalloc(&d_actor_weights, actor_weightbuffersize * sizeof(float));
+	if (err) { printf("actor weights malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_critic_weights, critic_weightbuffersize * sizeof(float));
+	if (err) { printf("critic weights malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_actor_bias, actor_biassize * sizeof(float));
+	if (err) { printf("actor bias malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_critic_bias, critic_biassize * sizeof(float));
+	if (err) { printf("critic bias malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_actor_nodvals, hbatchsize * actor_nodedatasize * sizeof(float));
+	if (err) { printf("actor nodevals malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_critic_nodvals, hbatchsize * critic_nodedatasize * sizeof(float));
+	if (err) { printf("critic nodevals malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_actor_preact, hbatchsize * actor_nodedatasize * sizeof(float));
+	if (err) { printf("actor pereact malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_critic_preact, hbatchsize * critic_nodedatasize * sizeof(float));
+	if (err) { printf("critic preact malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_actor_delta, hbatchsize * actor_nodedatasize * sizeof(float));
+	if (err) { printf("actor delta malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_critic_delta, hbatchsize * critic_nodedatasize * sizeof(float));
+	if (err) { printf("critic delta malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_state, replaybuffersize * sizeof(replaybuffer));
+	if (err) { printf("state  malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_indices, replaybuffersize * sizeof(int));
+	if (err) { printf("indices malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_antity_nodevals, antitynodesize * sizeof(float));
+	if (err) { printf("antity nodevals malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_actlayer, actor_layers * sizeof(Layer));
+	if (err) { printf("actlayer malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&d_critlayer, critic_layers * sizeof(Layer));
+	if (err) { printf("critic layer malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&actor_adam_weights, actor_weightbuffersize * sizeof(float2));
+	if (err) { printf("actor adam weights malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&actor_adam_bias, actor_biassize * sizeof(float2));
+	if (err) { printf("actor adam bias malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&critic_adam_weights, critic_weightbuffersize * sizeof(float2));
+	if (err) { printf("critic adam weights malloc failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMalloc(&critic_adam_bias, critic_biassize * sizeof(float2));
+	if (err) { printf("critic adam bias malloc failed %s \n", cudaGetErrorString(err)); }
+	
+	err= cudaMemset(actor_adam_weights, 0.0f, actor_weightbuffersize * sizeof(float2));
+	if (err) { printf("actor adam weights memset failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMemset(actor_adam_bias, 0.0f, actor_biassize * sizeof(float2));
+	if (err) { printf("actor adam bias memset failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMemset(critic_adam_weights, 0.0f, critic_weightbuffersize * sizeof(float2));
+	if (err) { printf("critic adam weights memset failed %s \n", cudaGetErrorString(err)); }
+	err= cudaMemset(critic_adam_bias, 0.0f, critic_biassize * sizeof(float2));
+	if (err) { printf("critic adam bias memset failed %s \n", cudaGetErrorString(err)); }
 
-	cudaMemset(actor_adam_weights, 0.0f, actor_weightbuffersize * sizeof(float2));
-	cudaMemset(actor_adam_bias, 0.0f, actor_biassize * sizeof(float2));
-	cudaMemset(critic_adam_weights, 0.0f, critic_weightbuffersize * sizeof(float2));
-	cudaMemset(critic_adam_bias, 0.0f, critic_biassize * sizeof(float2));
-
-	cudaError_t err = cudaGetLastError();
-	if (err) {
-		printf("network malloc failed %s \n", cudaGetErrorString(err));
-	}
-	else {
-		printf("network malloc done \n");
-	}
+	
+		
+	
+	
 }
 void copywbtogpu() {
-	cudaMemcpy(d_actor_weights, actor_weights.data(), actor_weightbuffersize * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_critic_weights, critic_weights.data(), critic_weightbuffersize * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_actor_bias, actor_bias.data(), actor_biassize * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_critic_bias, critic_bias.data(), critic_biassize * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_actlayer, actor_layerdata.data(), actor_layers * sizeof(Layer), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_critlayer, critic_layerdata.data(), critic_layers * sizeof(Layer), cudaMemcpyHostToDevice);
+	cudaError_t err;
 
-	cudaError_t err = cudaGetLastError();
-	if (err) {
-		printf("network memcpy failed %s \n", cudaGetErrorString(err));
-	}
-	else {
-		printf("network memcpy done \n");
-	}
+	err=cudaMemcpy(d_actor_weights, actor_weights.data(), actor_weightbuffersize * sizeof(float), cudaMemcpyHostToDevice);
+	if (err) { printf("actor weights memcpy failed %s \n", cudaGetErrorString(err)); }
+	err=cudaMemcpy(d_critic_weights, critic_weights.data(), critic_weightbuffersize * sizeof(float), cudaMemcpyHostToDevice);
+	if (err) { printf("critic weights memcpy failed %s \n", cudaGetErrorString(err)); }
+	err=cudaMemcpy(d_actor_bias, actor_bias.data(), actor_biassize * sizeof(float), cudaMemcpyHostToDevice);
+	if (err) { printf("actor bias memcpy failed %s \n", cudaGetErrorString(err)); }
+	err=cudaMemcpy(d_critic_bias, critic_bias.data(), critic_biassize * sizeof(float), cudaMemcpyHostToDevice);
+	if (err) { printf("critic bias memcpy failed %s \n", cudaGetErrorString(err)); }
+	err=cudaMemcpy(d_actlayer, actor_layerdata.data(), actor_layers * sizeof(Layer), cudaMemcpyHostToDevice);
+	if (err) { printf("actlayer memcpy failed %s \n", cudaGetErrorString(err)); }
+	err=cudaMemcpy(d_critlayer, critic_layerdata.data(), critic_layers * sizeof(Layer), cudaMemcpyHostToDevice);
+	if (err) { printf("critlayer memcpy failed %s \n", cudaGetErrorString(err)); }
+
+	
 
 }
 void restart() {
 	save_weights();
+	unregistervbo();
 #if usecuda
 	freedevmem();
 #endif
 	cudafree();
-
 	printf("memfree on restart \n");
 	robot_count = sample_robot_count;
 	actor_weightbuffersize = 0;
@@ -1089,11 +1127,10 @@ void restart() {
 	critic_nodedatasize = 0;
 	actor_layers = 0;
 	critic_layers = 0;
-
+	printf("variable reset \n");
 	initrobot(robot_count);
 
 	initnetwork();
-	printf("network initialized \n");
 
 
 
@@ -1102,14 +1139,14 @@ void restart() {
 void initnetwork() {
 	replaybuffersize -= replaybuffersize % robot_count;
 	initlayers();
-
+	setconst();
 	initWB(-0.5f, 0.5f);
 	allocatenetmem();
 	copywbtogpu();
 	allocate();
 	//setmaxdisttotarget();
 
-	printf("network init complete \n");
+	printf("network init complete \n==================\n");
 
 }
 void cudafree() {
@@ -1128,7 +1165,6 @@ void cudafree() {
 	cudaFree(d_antity_nodevals);
 	cudaFree(d_actlayer);
 	cudaFree(d_critlayer);
-	cudaFree(d_bodies);
 
 
 }

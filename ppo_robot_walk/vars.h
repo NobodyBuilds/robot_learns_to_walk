@@ -14,9 +14,9 @@
 #define radtodeg 180.0f/PI
 #define maxjointstrength 2.0f
 #define inputs 79
-#define output 6
-#define maxvel 25.0f
-#define maxangvel 15.0f 
+#define output 12
+#define maxvel 150.0f
+#define maxangvel 100.0f 
 #define maxtorque 100.0f
 #define maxmass 100.0f
 #define maxinertia 400000.0f
@@ -85,7 +85,7 @@ inline bool dummyCircle = false;
 
 
 
-inline __device__ float clamp(float val, float min, float max) {
+inline __device__ __host__ float clamp(float val, float min, float max) {
 	return fminf(fmaxf(val, min), max);
 }
 
@@ -182,7 +182,8 @@ inline int blocks(int n) {
 inline float alive = 1.0f;
 inline float dead = -10.0f;
 inline float feettouching = 0.0f;
-
+inline float distr = 1.0f;
+inline float yup = 1.0f;
 
 
 
