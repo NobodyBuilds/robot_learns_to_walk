@@ -12,11 +12,11 @@
 #define startx 500.0f
 #define degtorad PI/180.0f
 #define radtodeg 180.0f/PI
-#define maxjointstrength 2.0f
+#define maxjointstrength 5.0f
 #define inputs 79
 #define output 12
-#define maxvel 150.0f
-#define maxangvel 100.0f 
+#define maxvel 1000.0f
+#define maxangvel 1000.0f 
 #define maxtorque 100.0f
 #define maxmass 100.0f
 #define maxinertia 400000.0f
@@ -64,6 +64,7 @@ struct body {
     bool leftfeettouching;
     bool rightfeettouching;
     bool alive;
+    float olddist;
     joint leftknee, rightknee;
     joint leftankle, rightankle;
     joint lefthip, righthip;
@@ -180,12 +181,12 @@ inline int blocks(int n) {
 };
 //rewards  
 inline float alive = 1.0f;
-inline float dead = -10.0f;
+inline float dead = 10.0f;
 inline float feettouching = 0.0f;
 inline float distr = 1.0f;
 inline float yup = 1.0f;
-
-
+inline float reversepenalty = 1.0f;
+inline float forwardr = 1.0f;
 
 inline std::vector<quadvertex2d> renderdata;
 

@@ -11,7 +11,7 @@
 #include "ui.h"
 
 
-#define G 98.1f
+#define G 150.0f
 
 #define itrs 3
 
@@ -91,6 +91,7 @@ __global__ void d_setrobotdata(int n, body* robotdata) {
 	robotdata[i].torsotouchingground = false;
 	robotdata[i].leftfeettouching = false;
 	robotdata[i].rightfeettouching = false;
+	robotdata[i].olddist = 0.0f;
 
 
 }
@@ -112,6 +113,7 @@ __device__ void resetrobotidxkernel( body& robotdata) {
 	b.leftfeettouching = false;
 	b.rightfeettouching = false;
 	b.torsotouchingground = false;
+	b.olddist = 0.0f;
 	
 }
 

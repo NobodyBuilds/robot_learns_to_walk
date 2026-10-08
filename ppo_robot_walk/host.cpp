@@ -61,11 +61,11 @@ int main()
 		renderRobot();
 		renderUI();
 
-		if (timer >= gentime) {
+		/*if (timer >= gentime) {
 			timer -= gentime;
 			gen++;
 			resetrobots();
-		}
+		}*/
 		noRender.swapBuffers();
 
 		double elapsed = now - fpsClock;

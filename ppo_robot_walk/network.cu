@@ -515,7 +515,7 @@ __device__ int id = 0;
 
 __device__ int logframe = 0;
 
-__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr,float distr,float yr) {
+__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr,float distr,float yr,float reverse) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
@@ -526,10 +526,30 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, 
 	float dead = d_body[i].alive ? aliver : -deadr;
 
 	float feet = (d_body[i].leftfeettouching || d_body[i].rightfeettouching) ? feetr : 0.0f;
-	float dist = ((d_body[i].torso.pos.x - 500.0f) / maxdist)*distr;
-	float straight = (d_body[i].torso.pos.y / 335.0f) * yr;//335.0f is robot height from torso to feet
-	float sum = dead + feet + straight + dist;
+
+	float olddist = d_body[i].olddist;
+	float dist = (olddist < (d_body[i].torso.pos.x - 500.0f)) ? distr : 0.0f;
+
+	float val = clamp(d_body[i].torso.pos.y / 535.0f, 0.0f, 1.0f);
+	float straight;
+	if (d_body[i].leftfeettouching || d_body[i].rightfeettouching) {
+		straight = val * yr;
+	}
+	if (!d_body[i].leftfeettouching && !d_body[i].rightfeettouching) {
+
+		straight = -val * yr;
+	}
+		
+		
+
+
+	float d = (olddist > (d_body[i].torso.pos.x - 500.0f)) ? -reverse : 0.0f;
+	float backward = d;
+	
+	float sum = dead + feet + straight + dist+ backward;
 	float reward =sum;
+
+	d_body[i].olddist = d_body[i].torso.pos.x - 500.0f;
 
 
 	buffer[bidx].reward = reward;
@@ -864,7 +884,7 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 
 }
 void reward(int s) {
-	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, alive, dead,  feettouching,distr,yup);
+	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, alive, dead,  feettouching,distr,yup,reversepenalty);
 
 
 
