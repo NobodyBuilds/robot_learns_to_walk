@@ -13,7 +13,7 @@
 
 #define G 150.0f
 
-#define itrs 3
+#define itrs 10
 
 std::vector<circlevertex2d> jointdata;
 

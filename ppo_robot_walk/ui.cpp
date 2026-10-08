@@ -58,9 +58,10 @@ void renderUI() {
 	ImGui::DragFloat("alive reward", &alive, 0.01f, 0.0f, 100.0f);
 	ImGui::DragFloat("dead penalty", &dead, 0.01f, 0.0f, 100.0f);
 	ImGui::DragFloat("feet reward", &feettouching, 0.01f, 0.0f, 100.0f);
-	ImGui::DragFloat("dist reward", &distr, 0.01f, 0.0f, 100.0f);
 	ImGui::DragFloat("straight reward", &yup, 0.01f, 0.0f, 100.0f);
-	ImGui::DragFloat("reverse penalty", &reversepenalty, 0.01f, 0.0f, 100.0f);
+	ImGui::DragFloat("dist reward", &distr, 0.01f, 0.0f, 100.0f);
+	ImGui::DragFloat("forward reward", &forwardr, 0.01f, 0.0f, 1.0f);
+	ImGui::DragFloat("reverse penalty", &reversepenalty, 0.01f, 0.0f, 1.0f);
 
 	//ImGui::Separator();
 	ImGui::Spacing();

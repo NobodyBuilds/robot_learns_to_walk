@@ -180,11 +180,11 @@ inline int blocks(int n) {
 	return (n + threads - 1) / threads;
 };
 //rewards  
-inline float alive = 1.0f;
-inline float dead = 10.0f;
+inline float alive = 0.35f;
+inline float dead = 5.0f;
 inline float feettouching = 0.0f;
-inline float distr = 1.0f;
-inline float yup = 1.0f;
+inline float distr = 100.0f;
+inline float yup = 2.0f;
 inline float reversepenalty = 1.0f;
 inline float forwardr = 1.0f;
 

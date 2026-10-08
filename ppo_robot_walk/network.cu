@@ -515,7 +515,7 @@ __device__ int id = 0;
 
 __device__ int logframe = 0;
 
-__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr,float distr,float yr,float reverse) {
+__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr,float distr,float yr,float reverse,float fr) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
@@ -528,7 +528,35 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, 
 	float feet = (d_body[i].leftfeettouching || d_body[i].rightfeettouching) ? feetr : 0.0f;
 
 	float olddist = d_body[i].olddist;
-	float dist = (olddist < (d_body[i].torso.pos.x - 500.0f)) ? distr : 0.0f;
+	float dist = normalize(d_body[i].torso.pos.x -500.0f,maxdist,-maxdist);
+	float forward = 0.0f;
+	if (olddist < (d_body[i].torso.pos.x - 500.0f)) {
+		if (dist < 0.0f) {
+			forward = -(dist * distr) * fr;
+		}
+		else if(dist>0.0f){
+			forward = (dist*distr)*fr;
+		}
+	}
+		//(olddist < (d_body[i].torso.pos.x - 500.0f)) ? dist * fr : 0.0f;
+
+	//float d = (olddist > (d_body[i].torso.pos.x - 500.0f)) ?dist* ( - reverse) : 0.0f;
+	float backward = 0.0f;
+	if (olddist > (d_body[i].torso.pos.x - 500.0f)) {
+		if (dist < 0.0f) {
+			backward = (dist * distr) * reverse;
+		}
+		else if (dist > 0.0f) {
+			backward = -(dist * distr) * reverse;
+		}
+	}
+
+
+	if (d_body[i].torso.pos.x > maxdist || d_body[i].torso.pos.x < -maxdist) {
+		printf("WARNING: increase maxdist define or it will cause errors");
+		//future warning
+	}
+
 
 	float val = clamp(d_body[i].torso.pos.y / 535.0f, 0.0f, 1.0f);
 	float straight;
@@ -536,17 +564,16 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, 
 		straight = val * yr;
 	}
 	if (!d_body[i].leftfeettouching && !d_body[i].rightfeettouching) {
-
-		straight = -val * yr;
+		val = d_body[i].torso.pos.y / 535.0f;
+		float limit = 1.2f;//give headroom for small jumps
+		straight = val > limit ? -(val - limit)*yr:0.0f;
 	}
 		
 		
 
 
-	float d = (olddist > (d_body[i].torso.pos.x - 500.0f)) ? -reverse : 0.0f;
-	float backward = d;
 	
-	float sum = dead + feet + straight + dist+ backward;
+	float sum = dead + feet + straight + forward+ backward;
 	float reward =sum;
 
 	d_body[i].olddist = d_body[i].torso.pos.x - 500.0f;
@@ -884,7 +911,7 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 
 }
 void reward(int s) {
-	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, alive, dead,  feettouching,distr,yup,reversepenalty);
+	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, alive, dead,  feettouching,distr,yup,reversepenalty,forwardr);
 
 
 
