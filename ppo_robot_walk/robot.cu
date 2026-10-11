@@ -11,7 +11,7 @@
 #include "ui.h"
 
 
-#define G 150.0f
+#define G 600.0f
 
 #define itrs 10
 
@@ -21,6 +21,59 @@ std::vector<circlevertex2d> jointrenderdata;
 
 
 std::vector<body> robotdata;
+
+
+
+
+
+
+__device__ __host__ float2 getworldanchor(part& p, float2 localanchor);
+
+__device__ __host__ void placepartatanchor(part& child, float2 childanchor, float2 parentanchor) {
+	float radians = child.angle * (PI / 180.0f);
+	float c = cosf(radians);
+	float s = sinf(radians);
+	float2 rotatedanchor = {
+		childanchor.x * c - childanchor.y * s,
+		childanchor.x * s + childanchor.y * c
+	};
+	child.pos = {
+		parentanchor.x - rotatedanchor.x,
+		parentanchor.y - rotatedanchor.y
+	};
+}
+
+__device__ __host__ void setforwardpose(body& b) {
+	// Face +X with a small forward lean and a relaxed, staggered walking stance.
+	b.torso.angle = -8.0f;
+	b.leftthigh.angle = 10.0f;
+	b.rightthigh.angle = -12.0f;
+	b.leftshin.angle = 0.0f;
+	b.rightshin.angle = 0.0f;
+	b.leftfoot.angle = 0.0f;
+	b.rightfoot.angle = 0.0f;
+
+	b.lefthip.targetangle = b.leftthigh.angle - b.torso.angle;
+	b.righthip.targetangle = b.rightthigh.angle - b.torso.angle;
+	b.leftknee.targetangle = b.leftshin.angle - b.leftthigh.angle;
+	b.rightknee.targetangle = b.rightshin.angle - b.rightthigh.angle;
+	b.leftankle.targetangle = b.leftfoot.angle - b.leftshin.angle;
+	b.rightankle.targetangle = b.rightfoot.angle - b.rightshin.angle;
+
+	float2 leftHip = getworldanchor(b.torso, b.lefthip.parentanchor);
+	placepartatanchor(b.leftthigh, b.lefthip.childanchor, leftHip);
+	float2 leftKnee = getworldanchor(b.leftthigh, b.leftknee.parentanchor);
+	placepartatanchor(b.leftshin, b.leftknee.childanchor, leftKnee);
+	float2 leftAnkle = getworldanchor(b.leftshin, b.leftankle.parentanchor);
+	placepartatanchor(b.leftfoot, b.leftankle.childanchor, leftAnkle);
+
+	float2 rightHip = getworldanchor(b.torso, b.righthip.parentanchor);
+	placepartatanchor(b.rightthigh, b.righthip.childanchor, rightHip);
+	float2 rightKnee = getworldanchor(b.rightthigh, b.rightknee.parentanchor);
+	placepartatanchor(b.rightshin, b.rightknee.childanchor, rightKnee);
+	float2 rightAnkle = getworldanchor(b.rightshin, b.rightankle.parentanchor);
+	placepartatanchor(b.rightfoot, b.rightankle.childanchor, rightAnkle);
+}
 
 circlevertex2d* d_jointdata = nullptr;
 quadvertex2d* d_renderdata = nullptr;
@@ -39,6 +92,10 @@ void initpart(float2 pos, float2 size, float3 col,float mass, part& p) {
 	p.torque = 0.0f;
 	p.angvel = 0.0f;
 	p.isstatic = false;
+	for (int i = 0; i < 4; ++i) {
+		p.floorNormalImpulse[i] = 0.0f;
+		p.floorTangentImpulse[i] = 0.0f;
+	}
 }
 __device__ __host__
 void initjoint(part* parent, part* child, float2 parentanchor, float2 childanchor,float2 minmax,  joint& j) {
@@ -68,6 +125,13 @@ void setrobotdata(int n) {
 		initjoint(&robotdata[i].rightthigh, &robotdata[i].rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, {-90,90}, robotdata[i].rightknee);
 		initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, {-10,10}, robotdata[i].leftankle);
 		initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, {-10,10}, robotdata[i].rightankle);
+		setforwardpose(robotdata[i]);
+		robotdata[i].leftfootprevcontact = false;
+		robotdata[i].rightfootprevcontact = false;
+		robotdata[i].leftfootswinging = false;
+		robotdata[i].rightfootswinging = false;
+		robotdata[i].leftfoottakeoffrelx = 0.0f;
+		robotdata[i].rightfoottakeoffrelx = 0.0f;
 	}
 }
 __global__ void d_setrobotdata(int n, body* robotdata) {
@@ -85,13 +149,24 @@ __global__ void d_setrobotdata(int n, body* robotdata) {
 	initjoint(&robotdata[i].torso, &robotdata[i].rightthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata[i].righthip);
 	initjoint(&robotdata[i].leftthigh, &robotdata[i].leftshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].leftknee);
 	initjoint(&robotdata[i].rightthigh, &robotdata[i].rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].rightknee);
-	initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata[i].leftankle);
-	initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata[i].rightankle);
+	initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -25,25 }, robotdata[i].leftankle);
+	initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -25,25 }, robotdata[i].rightankle);
+	setforwardpose(robotdata[i]);
 	robotdata[i].alive = true;
 	robotdata[i].torsotouchingground = false;
 	robotdata[i].leftfeettouching = false;
 	robotdata[i].rightfeettouching = false;
 	robotdata[i].olddist = 0.0f;
+	robotdata[i].leftshintouching = false;
+	robotdata[i].rightshintouching = false;
+	robotdata[i].leftthightouching = false;
+	robotdata[i].rightthightouching = false;
+	robotdata[i].leftfootprevcontact = false;
+	robotdata[i].rightfootprevcontact = false;
+	robotdata[i].leftfootswinging = false;
+	robotdata[i].rightfootswinging = false;
+	robotdata[i].leftfoottakeoffrelx = 0.0f;
+	robotdata[i].rightfoottakeoffrelx = 0.0f;
 
 
 }
@@ -108,12 +183,23 @@ __device__ void resetrobotidxkernel( body& robotdata) {
 	initjoint(&robotdata.torso, &robotdata.rightthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata.righthip);
 	initjoint(&robotdata.leftthigh, &robotdata.leftshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata.leftknee);
 	initjoint(&robotdata.rightthigh, &robotdata.rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata.rightknee);
-	initjoint(&robotdata.leftshin, &robotdata.leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata.leftankle);
-	initjoint(&robotdata.rightshin, &robotdata.rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -10,10 }, robotdata.rightankle);
+	initjoint(&robotdata.leftshin, &robotdata.leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -25,25 }, robotdata.leftankle);
+	initjoint(&robotdata.rightshin, &robotdata.rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -25,25 }, robotdata.rightankle);
+	setforwardpose(robotdata);
 	b.leftfeettouching = false;
 	b.rightfeettouching = false;
 	b.torsotouchingground = false;
 	b.olddist = 0.0f;
+	b.leftshintouching = false;
+	b.rightshintouching = false;
+	b.leftthightouching = false;
+	b.rightthightouching = false;
+	b.leftfootprevcontact = false;
+	b.rightfootprevcontact = false;
+	b.leftfootswinging = false;
+	b.rightfootswinging = false;
+	b.leftfoottakeoffrelx = 0.0f;
+	b.rightfoottakeoffrelx = 0.0f;
 	
 }
 
@@ -298,16 +384,24 @@ float normalizeangle(float angle)
 __device__ __host__ 
 void intigratepart(part& p,float dt=DT){
 
+	for (int i = 0; i < 4; ++i) {
+		p.floorNormalImpulse[i] = 0.0f;
+		p.floorTangentImpulse[i] = 0.0f;
+	}
 	p.force.y =   -G * p.mass;
 	p.vel.x += (p.force.x * p.invmass) * dt;
 	p.vel.x = clamp(p.vel.x, -maxvel, maxvel);
 	p.vel.y += (p.force.y * p.invmass) * dt;
 	p.vel.y = clamp(p.vel.y, -maxvel, maxvel);
+	// Mild linear drag prevents horizontal momentum from persisting indefinitely.
+	float linearDamping = expf(-0.25f * dt);
+	p.vel.x *= linearDamping;
+	p.vel.y *= linearDamping;
 	p.pos.x += p.vel.x * dt;
 	p.pos.y += p.vel.y * dt;
 	p.torque = clamp(p.torque, -maxtorque, maxtorque);
 	p.angvel += (p.torque * p.invinertia) * dt;
-	p.angvel *= 0.999f;
+	p.angvel *= expf(-0.12f * dt);
 	p.angvel = clamp(p.angvel, -maxangvel, maxangvel);
 	p.angle += p.angvel * dt * (180.0f / PI);
 	p.angle = normalizeangle(p.angle);
@@ -406,17 +500,23 @@ float getclampedtargetangle(joint& j)
 	return j.targetangle;
 }
 __device__ __host__
-int getfloorcontacts(part& p,float2 contact[2],float floorY = 150.0f) {
+int getfloorcontacts(part& p,float2 contact[2],int contactCorner[2],float floorY = FLOOR_SURFACE_Y) {
 	float2 corners[4];
 	getcorners(p, corners);
+	float lowest = corners[0].y;
+	for (int i = 1; i < 4; ++i)
+		lowest = fminf(lowest, corners[i].y);
+
 	int count = 0;
 
-	for(int i=0; i < 4; i++) {
-		if (corners[i].y <= floorY + 0.5f)
+	for (int i = 0; i < 4; ++i) {
+		// Restrict friction contacts to the support edge/point.
+		if (corners[i].y <= lowest + 0.5f && corners[i].y <= floorY + 0.5f)
 		{
 			if (count < 2)
 			{
 				contact[count] = corners[i];
+				contactCorner[count] = i;
 				count++;
 			}
 		}
@@ -432,13 +532,12 @@ void impulse(part& p,float2 impulse, float2 r) {
 	p.angvel += torqueImpulse * p.invinertia;
 }
 __device__ __host__
-float solvefloorcontact(part& p, float2 contact) {
+float solvefloorcontact(part& p, float2 contact, int contactCorner) {
 	float2 r={
 		contact.x - p.pos.x,
 		contact.y - p.pos.y
 	};
 	float2 contactVel = getcontactvel(p, r);
-	if (contactVel.y >= 0.0f) return 0.0f;
 
 	float effectiveMass =
 		p.invmass +
@@ -447,8 +546,9 @@ float solvefloorcontact(part& p, float2 contact) {
 	if (effectiveMass == 0.0f)
 		return 0.0f;
 
-	float impulseMagnitude =
-		-contactVel.y / effectiveMass;
+	float oldImpulse = p.floorNormalImpulse[contactCorner];
+	float newImpulse = fmaxf(oldImpulse - contactVel.y / effectiveMass, 0.0f);
+	float impulseMagnitude = newImpulse - oldImpulse;
 
 	float2 impulseValue = {
 		0.0f,
@@ -456,13 +556,11 @@ float solvefloorcontact(part& p, float2 contact) {
 	};
 
 	impulse(p, impulseValue, r);
-
-	return impulseMagnitude;
+	p.floorNormalImpulse[contactCorner] = newImpulse;
+	return newImpulse;
 }
 __device__ __host__
-void solvefloorfriction(part& p,float2 contact, float friction,float normalimpulse) {
-	
-	if (normalimpulse <= 0.0f) return;
+void solvefloorfriction(part& p,float2 contact, float friction,float normalimpulse,int contactCorner) {
 	float2 r = {
 		contact.x - p.pos.x,
 		contact.y - p.pos.y
@@ -470,20 +568,20 @@ void solvefloorfriction(part& p,float2 contact, float friction,float normalimpul
 	float2 contactVel = getcontactvel(p, r);
 	float tangvel = contactVel.x;
 
-	if (fabsf(tangvel) < 0.0001f) return;
-
 	float effectivemass = p.invmass + (r.y * r.y) * p.invinertia;
-	float implse = -tangvel / effectivemass;
-	float maxfrciton = friction*normalimpulse;
+	if (effectivemass <= 0.0f) return;
+	float oldImpulse = p.floorTangentImpulse[contactCorner];
+	float maxFriction = friction * normalimpulse;
+	float newImpulse = clamp(oldImpulse - tangvel / effectivemass, -maxFriction, maxFriction);
+	float impulseDelta = newImpulse - oldImpulse;
+	p.floorTangentImpulse[contactCorner] = newImpulse;
 
-	implse = fmaxf(-maxfrciton, fminf(implse, maxfrciton));
-
-	float2 imp = { implse, 0.0f };
+	float2 imp = { impulseDelta, 0.0f };
 
 	impulse(p, imp, r);
 }
 __device__ __host__
-void floorcolisionpart(part& p,float floorY=150.0f) {
+void floorcolisionpart(part& p,float floorY=FLOOR_SURFACE_Y) {
 	
 
 	float lowest = getlowestpoint(p);
@@ -526,13 +624,21 @@ float getjointangleerror(joint& j)
 __device__ __host__
 void solvecontacts(part& p) {
 	float2 contact[2];
-	int count = getfloorcontacts(p, contact);
+	int contactCorner[2];
+	int count = getfloorcontacts(p, contact, contactCorner);
+	bool activeCorner[4] = { false, false, false, false };
 	for (int i = 0; i < count; i++) {
-		float normalimpulse = solvefloorcontact(p, contact[i]);
+		int corner = contactCorner[i];
+		activeCorner[corner] = true;
+		float normalimpulse = solvefloorcontact(p, contact[i], corner);
+		solvefloorfriction(p, contact[i], 1.0f, normalimpulse, corner);
 
-		
-		solvefloorfriction(p, contact[i], 0.8f, normalimpulse);
-
+	}
+	for (int corner = 0; corner < 4; ++corner) {
+		if (!activeCorner[corner]) {
+			p.floorNormalImpulse[corner] = 0.0f;
+			p.floorTangentImpulse[corner] = 0.0f;
+		}
 	}
 }
 __device__ __host__
@@ -564,24 +670,23 @@ void solvejointmotor(joint& j) {
 __device__ __host__
 void solvejointposition(joint& j)
 {
-	float2 parentanchor = getworldanchor(*j.parent, j.parentanchor);
-
-	float2 childanchor = getworldanchor(*j.child, j.childanchor);
-
-	float2 error = {
-		childanchor.x - parentanchor.x,
-		childanchor.y - parentanchor.y
-	};
-	float2 rp = {
-		parentanchor.x - j.parent->pos.x,
-		parentanchor.y - j.parent->pos.y
-	};
-
-	float2 rc = {
-		childanchor.x - j.child->pos.x,
-		childanchor.y - j.child->pos.y
-	};
 	for (int axis = 0; axis < 2; axis++) {
+		// The previous axis may have moved and rotated either part, so refresh
+		// the anchors, error, and lever arms before solving this axis.
+		float2 parentanchor = getworldanchor(*j.parent, j.parentanchor);
+		float2 childanchor = getworldanchor(*j.child, j.childanchor);
+		float2 error = {
+			childanchor.x - parentanchor.x,
+			childanchor.y - parentanchor.y
+		};
+		float2 rp = {
+			parentanchor.x - j.parent->pos.x,
+			parentanchor.y - j.parent->pos.y
+		};
+		float2 rc = {
+			childanchor.x - j.child->pos.x,
+			childanchor.y - j.child->pos.y
+		};
 
 		float2 n;
 		if (axis == 0)
@@ -661,10 +766,10 @@ void solvejointposition(joint& j)
 	}
 
 	// Enforce zero relative velocity at the joint anchors after positional projection.
-	parentanchor = getworldanchor(*j.parent, j.parentanchor);
-	childanchor = getworldanchor(*j.child, j.childanchor);
-	rp = { parentanchor.x - j.parent->pos.x, parentanchor.y - j.parent->pos.y };
-	rc = { childanchor.x - j.child->pos.x, childanchor.y - j.child->pos.y };
+	float2 parentanchor = getworldanchor(*j.parent, j.parentanchor);
+	float2 childanchor = getworldanchor(*j.child, j.childanchor);
+	float2 rp = { parentanchor.x - j.parent->pos.x, parentanchor.y - j.parent->pos.y };
+	float2 rc = { childanchor.x - j.child->pos.x, childanchor.y - j.child->pos.y };
 	float parentInvMass = j.parent->isstatic ? 0.0f : j.parent->invmass;
 	float childInvMass = j.child->isstatic ? 0.0f : j.child->invmass;
 	float parentInvInertia = j.parent->isstatic ? 0.0f : j.parent->invinertia;
@@ -928,33 +1033,34 @@ void floorcolision(body& b) {
 				float2 velocityC = getcontactvel(c, rC);
 				float normalVelocity = (velocityC.x - velocityA.x) * normal.x +
 					(velocityC.y - velocityA.y) * normal.y;
+				float normalImpulse = 0.0f;
 				if (normalVelocity < 0.0f) {
-					float normalImpulse = -normalVelocity / effectiveMass;
+					normalImpulse = -normalVelocity / effectiveMass;
 					float2 impulseValue = { normal.x * normalImpulse, normal.y * normalImpulse };
 					if (!a.isstatic)
 						impulse(a, { -impulseValue.x, -impulseValue.y }, rA);
 					if (!c.isstatic)
 						impulse(c, impulseValue, rC);
-
-					velocityA = getcontactvel(a, rA);
-					velocityC = getcontactvel(c, rC);
-					float2 tangent = { -normal.y, normal.x };
-					float tangentVelocity = (velocityC.x - velocityA.x) * tangent.x +
-						(velocityC.y - velocityA.y) * tangent.y;
-					float tangentCrossA = rA.x * tangent.y - rA.y * tangent.x;
-					float tangentCrossC = rC.x * tangent.y - rC.y * tangent.x;
-					float tangentMass = totalInvMass + tangentCrossA * tangentCrossA * invInertiaA +
-						tangentCrossC * tangentCrossC * invInertiaC;
-					if (tangentMass > 0.0f) {
-						float tangentImpulse = -tangentVelocity / tangentMass;
-						float maxTangentImpulse = 0.6f * normalImpulse;
-						tangentImpulse = fmaxf(-maxTangentImpulse, fminf(tangentImpulse, maxTangentImpulse));
-						float2 frictionImpulse = { tangent.x * tangentImpulse, tangent.y * tangentImpulse };
-						if (!a.isstatic)
-							impulse(a, { -frictionImpulse.x, -frictionImpulse.y }, rA);
-						if (!c.isstatic)
-							impulse(c, frictionImpulse, rC);
-					}
+				}
+				velocityA = getcontactvel(a, rA);
+				velocityC = getcontactvel(c, rC);
+				float2 tangent = { -normal.y, normal.x };
+				float tangentVelocity = (velocityC.x - velocityA.x) * tangent.x +
+					(velocityC.y - velocityA.y) * tangent.y;
+				float tangentCrossA = rA.x * tangent.y - rA.y * tangent.x;
+				float tangentCrossC = rC.x * tangent.y - rC.y * tangent.x;
+				float tangentMass = totalInvMass + tangentCrossA * tangentCrossA * invInertiaA +
+					tangentCrossC * tangentCrossC * invInertiaC;
+				if (tangentMass > 0.0f) {
+					float tangentImpulse = -tangentVelocity / tangentMass;
+					float positionalSupportImpulse = correction / DT;
+					float maxTangentImpulse = 0.6f * fmaxf(normalImpulse, positionalSupportImpulse);
+					tangentImpulse = fmaxf(-maxTangentImpulse, fminf(tangentImpulse, maxTangentImpulse));
+					float2 frictionImpulse = { tangent.x * tangentImpulse, tangent.y * tangentImpulse };
+					if (!a.isstatic)
+						impulse(a, { -frictionImpulse.x, -frictionImpulse.y }, rA);
+					if (!c.isstatic)
+						impulse(c, frictionImpulse, rC);
 				}
 			}
 		}
@@ -984,11 +1090,11 @@ __global__ void gettx(int n, body* robot) {
 	d_tx = farthestX;
 }
 
-__global__ void updatekernel(int n, body* b) {
+__global__ void updatekernel(int n, body* b, float dt) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n) return;
 
-	intigrate(b[i]);
+	intigrate(b[i], dt);
 	for (int k = 0; k < itrs; k++) {
 		solvejoints(b[i]);
 		floorcolision(b[i]);
@@ -999,10 +1105,10 @@ __global__ void updatekernel(int n, body* b) {
 __global__ void istouching(int n, body* robot) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
-
+	body& b = robot[i];
 	float y = getlowestpoint(robot[i].torso);
-	
-	if (y <= 150.0f) {
+	float limit = FLOOR_SURFACE_Y + 1.0f;
+	if (y <= limit) {
 		robot[i].torsotouchingground = true;
 	}
 	else {
@@ -1010,7 +1116,7 @@ __global__ void istouching(int n, body* robot) {
 	}
 
 	y = getlowestpoint(robot[i].leftfoot);
-	if (y <= 150.0f) {
+	if (y <= limit) {
 		robot[i].leftfeettouching = true;
 	}
 	else {
@@ -1018,15 +1124,52 @@ __global__ void istouching(int n, body* robot) {
 	}
 
 	y = getlowestpoint(robot[i].rightfoot);
-	if (y <= 150.0f) {
+	if (y <= limit) {
 		robot[i].rightfeettouching = true;
 	}
 	else {
 		robot[i].rightfeettouching = false;
 	}
+
+	y = getlowestpoint(robot[i].leftshin);
+	if (y <= limit) {
+		b.leftshintouching = true;
+	}
+	else {
+		b.leftshintouching = false;
+	}
+
+	y = getlowestpoint(robot[i].rightshin);
+	if (y <= limit) {
+		b.rightshintouching = true;
+	}
+	else {
+		b.rightshintouching = false;
+	}
+
+	y = getlowestpoint(robot[i].leftthigh);
+	if (y <= limit) {
+		b.leftthightouching = true;
+	}
+	else {
+		b.leftthightouching = false;
+	}
+
+	y = getlowestpoint(robot[i].rightthigh);
+	if (y <= limit) {
+		b.rightthightouching = true;
+	}
+	else {
+		b.rightthightouching = false;
+	}
 }
 void updateRobot(float dt) {
-	updatekernel << <blocks(robot_count), threads >> > (robot_count, d_bodies);
+	static float accumulator = 0.0f;
+	accumulator += clamp(dt, 0.0f, 0.1f);
+	while (accumulator >= DT) {
+		updatekernel << <blocks(robot_count), threads >> > (robot_count, d_bodies, DT);
+		accumulator -= DT;
+	}
 
 	gettx << <1, 1 >> > (robot_count, d_bodies);
 	cudaMemcpyFromSymbol(&tx, d_tx, sizeof(float), 0, cudaMemcpyDeviceToHost);

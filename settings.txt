@@ -1,0 +1,15 @@
+sample_robot_count=32
+run_ai=1
+training=1
+rollout_epoch=8
+legalive=0
+alive=0.0500000007
+dead=5
+feettouching=0
+yup=10
+distr=0.300000012
+forwardr=-2
+reversepenalty=2
+targetForwardSpeed=0
+steppingRewardWeight=3
+slidingPenaltyWeight=1

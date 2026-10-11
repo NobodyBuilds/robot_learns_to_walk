@@ -27,16 +27,17 @@ int main()
 	ImGui_ImplOpenGL3_Init(glsl_version);
 	noRender.movementSpeed = 20.0f;
 	//registervbo(robot_count);
+	loadsettings();
 	initrobot(robot_count);
 	initnetwork();
 	initfloor();
 	double lastTime = glfwGetTime();
 	double fpsClock = lastTime;
+	float simulationAccumulator = 0.0f;
 	
 	float br = 0.22f;
 	float bg = 0.57f;
 	float bb = 0.8f;
-
 	while(noRender.isWindowOpen())
 	{
 		noRender.updateCamera(true);
@@ -47,25 +48,29 @@ int main()
 		noRender.setInputBlocked(io.WantCaptureMouse || io.WantCaptureKeyboard);
 		noRender.pollEvents();
 		noRender.clearScreen(br, bg, bb);
-		if (run_ai) {
-			run_network();
-		}
-		else {
-
-	 	updateRobot();
+		simulationAccumulator += clamp(static_cast<float>(frameTime), 0.0f, 0.1f);
+		while (simulationAccumulator >= DT) {
+			if (run_ai) {
+				run_network(DT);
+			}
+			else {
+				updateRobot(DT);
+			}
+			simulationAccumulator -= DT;
 		}
 		timer += static_cast<float>(frameTime);
 		renderfloor();
-		cx = (tx<950.0f)?cx:tx;
+		cx = (tx<950.0f)?950.0f:tx;
 		cx = (tx > 0.0f) ? cx : tx+950.0f;
 		renderRobot();
 		renderUI();
 
-		/*if (timer >= gentime) {
+		if (timer >= gentime) {
 			timer -= gentime;
 			gen++;
+			cx = 950.0f;
 			resetrobots();
-		}*/
+		}
 		noRender.swapBuffers();
 
 		double elapsed = now - fpsClock;
@@ -81,12 +86,13 @@ int main()
 		}
 	}
 
-	//save_weights();
+	save_weights();
+	savesettings();
 	noRender.closeWindow();
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
-	//cudafree();
+	cudafree();
 	freedevmem();
 	unregistervbo();
 

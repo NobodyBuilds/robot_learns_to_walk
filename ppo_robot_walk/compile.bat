@@ -8,6 +8,13 @@ if errorlevel 1 (
 )
 cd /d D:\visual_studio\ppo_robot_walk\ppo_robot_walk
 set "OUTPUT=%~dp0..\robot_walks.exe"
+taskkill /F /IM robot_walks.exe >nul 2>&1
+if exist "%OUTPUT%" del /f /q "%OUTPUT%"
+if exist "%OUTPUT%" (
+  echo robot_walks.exe is still locked - close ncu / debugger / AV scan
+  pause
+  exit /b 1
+)
 for %%F in ("%OUTPUT%") do set "OUTPUT_DIR=%%~dpF"
 nvcc -std=c++17 -rdc=true -Xcompiler "/std:c++17 /MD" -o "%OUTPUT%" host.cpp render.cpp ui.cpp robot.cu network.cu D:\glad\src\glad.c ^
   "D:\visual_studio\imgui-1.91.1\imgui.cpp" ^

@@ -13,7 +13,7 @@
 #define degtorad PI/180.0f
 #define radtodeg 180.0f/PI
 #define maxjointstrength 5.0f
-#define inputs 79
+#define inputs 76
 #define output 12
 #define maxvel 1000.0f
 #define maxangvel 1000.0f 
@@ -21,6 +21,9 @@
 #define maxmass 100.0f
 #define maxinertia 400000.0f
 #define maxdist 10000.0f
+#define FLOOR_CENTER_Y 50.0f
+#define FLOOR_SIZE 200.0f
+#define FLOOR_SURFACE_Y (FLOOR_CENTER_Y + FLOOR_SIZE * 0.5f)
 
 
 
@@ -29,8 +32,8 @@ inline int threads = 256;
 inline float dt = DT;
 //floor variables
 inline float floorx = 0.0f;
-inline float floory = 50.0f;
-inline float fsize = 200.0f;
+inline float floory = FLOOR_CENTER_Y;
+inline float fsize = FLOOR_SIZE;
 
 //camera
 
@@ -42,29 +45,40 @@ inline float tx = 400.0f;
 //robot variables
 // Number of independent robot instances in the environment.
 struct part {
-    float3 col;
+    bool isstatic = false;
     float angvel, mass, inertia, invmass, invinertia, torque;
+    float floorNormalImpulse[4], floorTangentImpulse[4];
     float angle;
     float2 pos;
     float2 size;
     float2 vel;
     float2 force;
-    bool isstatic = false;
+    float3 col;
 };
 
 struct joint {
-    part* parent;
-    part* child;
-    float2 parentanchor, childanchor;
     float targetangle, strength;
     float minangle, maxangle;
+    float2 parentanchor, childanchor;
+    part* parent;
+    part* child;
 };
 struct body {
     bool torsotouchingground;
     bool leftfeettouching;
     bool rightfeettouching;
+    bool leftshintouching;
+    bool rightshintouching;
+    bool leftthightouching;
+    bool rightthightouching;
     bool alive;
     float olddist;
+    bool leftfootprevcontact;
+    bool rightfootprevcontact;
+    bool leftfootswinging;
+    bool rightfootswinging;
+    float leftfoottakeoffrelx;
+    float rightfoottakeoffrelx;
     joint leftknee, rightknee;
     joint leftankle, rightankle;
     joint lefthip, righthip;
@@ -103,7 +117,7 @@ inline float mloss = 0.0f;
 inline float oldmloss = 0.0f;
 inline float rollout_time = 0.0f;
 inline float lr = 0.001f;
-inline float gentime = 20.0f;
+inline float gentime = 60.0f;
 inline float timer = 0.0f;
 inline float fpsTimer = 0.0f;
 inline float fpsCount = 0;
@@ -180,13 +194,17 @@ inline int blocks(int n) {
 	return (n + threads - 1) / threads;
 };
 //rewards  
-inline float alive = 0.35f;
+inline float alive = 0.05f;
 inline float dead = 5.0f;
 inline float feettouching = 0.0f;
-inline float distr = 100.0f;
-inline float yup = 2.0f;
-inline float reversepenalty = 1.0f;
+inline float distr = 0.3f;
+inline float yup = 0.25f;
+inline float reversepenalty = 1.5f;
 inline float forwardr = 1.0f;
+inline float targetForwardSpeed = 100.0f;
+inline float steppingRewardWeight = 3.0f;
+inline float slidingPenaltyWeight = 0.5f;
+inline bool legalive = false;
 
 inline std::vector<quadvertex2d> renderdata;
 

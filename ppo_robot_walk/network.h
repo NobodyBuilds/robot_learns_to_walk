@@ -8,5 +8,5 @@ void shuffleindices();
 void cudafree();
 void restart();
 void reward(int s);
-void run_network();
+void run_network(float dt);
 void save_weights();

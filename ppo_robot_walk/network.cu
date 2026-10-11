@@ -20,7 +20,6 @@
 #include "norender.h"
 
 
-
 struct device_data {
 	int n;
 	int layers;
@@ -135,7 +134,7 @@ void initlayers() {
 
 	setoffsets(false);
 
-
+	printf("model parameter size :%d \n", actor_weightbuffersize + actor_biassize);
 }
 
 
@@ -237,14 +236,15 @@ void write_file(const std::string& address, std::vector<float>& arr) {
 void save_weights() {
 
 
-	cudaMemcpy(actor_weights.data(), d_actor_weights, actor_weightbuffersize * sizeof(float), cudaMemcpyDeviceToHost);
-	cudaMemcpy(critic_weights.data(), d_critic_weights, critic_weightbuffersize * sizeof(float), cudaMemcpyDeviceToHost);
-	cudaMemcpy(actor_bias.data(), d_actor_bias, actor_biassize * sizeof(float), cudaMemcpyDeviceToHost);
-	cudaMemcpy(critic_bias.data(), d_critic_bias, critic_biassize * sizeof(float), cudaMemcpyDeviceToHost);
-	cudaError_t err = cudaGetLastError();
-	if (err) {
-		printf(" memcpy from device to save weights failed %s \n", cudaGetErrorString(err));
-	}
+	cudaError_t err= cudaMemcpy(actor_weights.data(), d_actor_weights, actor_weightbuffersize * sizeof(float), cudaMemcpyDeviceToHost);
+	if (err !=cudaSuccess) {printf(" memcpy from device to save actor weights failed %s \n", cudaGetErrorString(err));}
+	err=cudaMemcpy(critic_weights.data(), d_critic_weights, critic_weightbuffersize * sizeof(float), cudaMemcpyDeviceToHost);
+	if (err !=cudaSuccess) {printf(" memcpy from device to save critic weights failed %s \n", cudaGetErrorString(err));}
+	err=cudaMemcpy(actor_bias.data(), d_actor_bias, actor_biassize * sizeof(float), cudaMemcpyDeviceToHost);
+	if (err !=cudaSuccess) {printf(" memcpy from device to save actor bias failed %s \n", cudaGetErrorString(err));}
+	err=cudaMemcpy(critic_bias.data(), d_critic_bias, critic_biassize * sizeof(float), cudaMemcpyDeviceToHost);
+	if (err !=cudaSuccess) {printf(" memcpy from device to save critic bias failed %s \n", cudaGetErrorString(err));}
+	
 	std::remove("modeldata/actorweights.txt");
 	std::remove("modeldata/criticweights.txt");
 	std::remove("modeldata/actorbias.txt");
@@ -258,7 +258,7 @@ void save_weights() {
 }
 
 __device__ double MSE = 0.0f;
-__device__  int batchsize = 128;
+
 __device__ float leakyrelu(float x) {
 
 	return (x > 0.f) ? x : 0.01f * x;
@@ -271,7 +271,7 @@ __device__ __forceinline__ void firstlayer(int n, int ci, int w, int D, int Inpu
 
 		float x = bias[idx(0, i)];
 		for (int k = 0; k < inputs; k++) {
-			x += input[k] * weights[idx(w + i * inputs, k)];
+			x += input[k] * weights[k * n + i];
 
 		}
 
@@ -321,7 +321,8 @@ __device__ float get_lClip(replaybuffer* buffer, int s) {
 	return clipped_out;
 }
 __device__ float beta = 0.05f;
-__global__ void compute_delta(int n, int d, int l1_nout, int l1w, int l1_nin, int l1d, bool outlayer, bool isactor, float* nodedata, float* dDelta, float* dWeights, float* dpreact, replaybuffer* buffer, int s, int* indices, int nodedatasize, int gen) {
+
+__global__ void compute_delta(int n, int d, int l1_nout, int l1w, int l1_nin, int l1d, bool outlayer, bool isactor,const float* __restrict__ nodedata, float* dDelta, const float* __restrict__ dWeights,const float* __restrict__ dpreact, replaybuffer*  buffer, int s,const int* __restrict__ indices, int nodedatasize, int gen,int batchsize) {
 
 
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -330,7 +331,6 @@ __global__ void compute_delta(int n, int d, int l1_nout, int l1w, int l1_nin, in
 
 	int bidx = indices[s * batchsize + b];
 
-	float target = buffer[bidx].rtg;
 	if (outlayer) {
 		if (isactor) {
 			float coeff = get_lClip(buffer, bidx);
@@ -340,11 +340,13 @@ __global__ void compute_delta(int n, int d, int l1_nout, int l1w, int l1_nin, in
 
 		}
 		else {
+	float target = buffer[bidx].rtg;
 			dDelta[b * nodedatasize + d + i] = nodedata[b * nodedatasize + d + i] - target;
 		}
 	}
 	else {
 		float sum = 0.0f;
+#pragma unroll 4
 		for (int k = 0; k < l1_nout; k++) {
 			sum += dWeights[l1w + k * l1_nin + i] * dDelta[b * nodedatasize + l1d + k];
 		}
@@ -374,56 +376,72 @@ __device__ float getv(float v, float gradient, float beta) {
 __device__ float getlr(float lr, float m, float v, float eps) {
 	return lr * m / (sqrtf(v) + eps);
 }
-__global__ void tuneweights(int n, int nin, int l, int l1d, int lw, int lsize, int d, int lb, float lr, float* dNodeData, float* dWeights, float* dDelta, float* dBias, const replaybuffer* __restrict__ buffer, int s, int curbatch, int nodedatasize, int* indices, bool isactor, float2* aweights, float2* abias, int t) {
 
-	float beta1 = 0.9f;
-	float beta2 = 0.999f;
-	float betat1 = 1.0f - powf(beta1, t);
-	float betat2 = 1.0f - powf(beta2, t);
+__device__ __forceinline__ void adam_update(float& w, float2& mv, const float g,
+	const float lrate, const float b1, const float b2, const float bt1, const float bt2)
+{
+	const float m = b1 * mv.x + (1.0f - b1) * g;
+	const float v = b2 * mv.y + (1.0f - b2) * g * g;
+	mv.x = m; mv.y = v;
+	w -= lrate * (m * bt1) / (sqrtf(v * bt2) + 1e-6f);      
+}
 
-	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	if (i >= n)
-		return;
+__global__ void tuneweights(const Layer* __restrict__ L, const int curbatch, const int s, const int nds,
+	const float* __restrict__ nodes, const float* __restrict__ delta,
+	const replaybuffer* __restrict__ buffer, const int* __restrict__ indices,
+	float* W, float* Bv, float2* aw, float2* ab,
+	const float lrate, const float b1, const float b2, const float bt1, const float bt2,const int batchsize) {
 
-	float biasgrad = 0.0f;
-	for (int b = 0; b < curbatch; b++)
-		biasgrad += dDelta[b * nodedatasize + d + i];
-	float bm = abias[lb + i].x;
-	float bv = abias[lb + i].y;
-	bm = getmoment(bm, biasgrad / curbatch, beta1);
-	abias[lb + i].x = bm;
-	float bm_hat = bm / betat1;
+	
 
 
-	bv = getv(bv, biasgrad / curbatch, beta2);
-	abias[lb + i].y = bv;
-	float bv_hat = bv / betat2;
+	extern __shared__ float sh[];                      
 
-	float bupdate = getlr(lr, bm_hat, bv_hat, 1e-6f);
-	//	bupdate= clamp(bupdate, -0.05f, 0.05f);
-	dBias[lb + i] -= bupdate;
-	for (int k = 0; k < nin; k++)
-	{
-		float wgrad = 0.0f;
-		for (int b = 0; b < curbatch; b++)
-		{
-			int off = b * nodedatasize;
-			float nodeVal = (l == 0) ? buffer[indices[s * batchsize + b]].s1[k] : dNodeData[off + l1d + k];
-			wgrad += dDelta[off + d + i] * nodeVal;
+	int row = blockIdx.x, l = 0;
+	for (;; ++l) {
+		const int rows = (l == 0) ? L[0].Nin : L[l].Nout;
+		if (row < rows) break;
+		row -= rows;
+	}
+	const int n = L[l].Nout, nin = L[l].Nin, lw = L[l].wIdx, d = L[l].dIdx, lb = L[l].bIdx;
+	const float fb = (float)curbatch;
+
+	if (l == 0) {
+		const int k = row;
+		for (int b = threadIdx.x; b < curbatch; b += blockDim.x)
+			sh[b] = buffer[indices[s * batchsize + b]].s1[k];
+		__syncthreads();
+		for (int i = threadIdx.x; i < n; i += blockDim.x) {
+			float g = 0.0f, bg = 0.0f;
+#pragma unroll 8
+			for (int b = 0; b < curbatch; ++b) {
+				const float dv = delta[b * nds + d + i];       
+				g = fmaf(dv, sh[b], g);
+				bg += dv;
+			}
+			const int wi = lw + k * n + i;
+			adam_update(W[wi], aw[wi], g / fb, lrate, b1, b2, bt1, bt2);
+			if (k == 0) adam_update(Bv[lb + i], ab[lb + i], bg / fb, lrate, b1, b2, bt1, bt2);
 		}
-
-		float wm = aweights[lw + i * lsize + k].x;
-		float wv = aweights[lw + i * lsize + k].y;
-		wm = getmoment(wm, wgrad / curbatch, beta1);
-		aweights[lw + i * lsize + k].x = wm;
-		float wm_hat = wm / betat1;
-
-		wv = getv(wv, wgrad / curbatch, beta2);
-		aweights[lw + i * lsize + k].y = wv;
-		float wv_hat = wv / betat2;
-		float wupdate = getlr(lr, wm_hat, wv_hat, 1e-6f);
-		//wupdate = clamp(wupdate, -0.05f, 0.05f);
-		dWeights[lw + i * lsize + k] -= wupdate;
+	}
+	else {
+		const int i = row, l1d = L[l - 1].dIdx;
+		for (int b = threadIdx.x; b < curbatch; b += blockDim.x)
+			sh[b] = delta[b * nds + d + i];
+		__syncthreads();
+		for (int k = threadIdx.x; k < nin; k += blockDim.x) {
+			float g = 0.0f;
+#pragma unroll 8
+			for (int b = 0; b < curbatch; ++b)
+				g = fmaf(sh[b], nodes[b * nds + l1d + k], g);   
+			const int wi = lw + i * nin + k;
+			adam_update(W[wi], aw[wi], g / fb, lrate, b1, b2, bt1, bt2);
+		}
+		if (threadIdx.x == 0) {
+			float bg = 0.0f;
+			for (int b = 0; b < curbatch; ++b) bg += sh[b];
+			adam_update(Bv[lb + i], ab[lb + i], bg / fb, lrate, b1, b2, bt1, bt2);
+		}
 	}
 }
 __device__ float sigmoid(float x) {
@@ -496,7 +514,7 @@ __device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* bu
 	d_body[ci] = b;
 	buffer[bidx].old_logprob = oldLogprob;
 }
-__global__ void getlog(int n, int d, int* indices, replaybuffer* buffer, int s, float* nodevals, int nodedatasize) {
+__global__ void getlog(int n, int d, int* indices, replaybuffer* buffer, int s, float* nodevals, int nodedatasize,int batchsize) {
 
 	int b = blockIdx.x * blockDim.x + threadIdx.x;
 	if (b >= n)return;
@@ -509,18 +527,78 @@ __global__ void getlog(int n, int d, int* indices, replaybuffer* buffer, int s, 
 	}
 	buffer[bidx].logprob = logprob;
 }
-__device__ float d_reward = 0.0f;
 __device__ float oldr = 0.0f;
 __device__ int id = 0;
 
 __device__ int logframe = 0;
+__device__ float normalize(float x, float max, float min) {
+	return ((x - min) / (max - min)) * 2.0f - 1.0f;
+	//[-1,1] bounded for better normalization for values in a rnage
+}
 
-__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr,float distr,float yr,float reverse,float fr) {
+__device__ float steppingreward(body& b,float stepr) {
+	if (!b.alive)
+		return 0.0f;
+
+	constexpr float minimumStep = 10.0f;
+	constexpr float fullRewardStep = 80.0f;
+	float reward = 0.0f;
+	bool leftContact = b.leftfeettouching;
+	bool rightContact = b.rightfeettouching;
+
+	// Record lift-off only while the other foot is supporting the robot.
+	if (b.leftfootprevcontact && !leftContact && rightContact) {
+		b.leftfootswinging = true;
+		b.leftfoottakeoffrelx = b.leftfoot.pos.x - b.torso.pos.x;
+	}
+	if (b.rightfootprevcontact && !rightContact && leftContact) {
+		b.rightfootswinging = true;
+		b.rightfoottakeoffrelx = b.rightfoot.pos.x - b.torso.pos.x;
+	}
+
+	// Pay once, on landing, for placing the swinging foot farther forward
+	// relative to the torso while the opposite foot remains in contact.
+	if (b.leftfootswinging && !b.leftfootprevcontact && leftContact) {
+		if (rightContact) {
+			float landingRelX = b.leftfoot.pos.x - b.torso.pos.x;
+			float forwardStride = landingRelX - b.leftfoottakeoffrelx;
+			float score = clamp((forwardStride - minimumStep) /
+				(fullRewardStep - minimumStep), 0.0f, 1.0f);
+			reward += stepr * score;
+		}
+		b.leftfootswinging = false;
+	}
+	if (b.rightfootswinging && !b.rightfootprevcontact && rightContact) {
+		if (leftContact) {
+			float landingRelX = b.rightfoot.pos.x - b.torso.pos.x;
+			float forwardStride = landingRelX - b.rightfoottakeoffrelx;
+			float score = clamp((forwardStride - minimumStep) /
+				(fullRewardStep - minimumStep), 0.0f, 1.0f);
+			reward += stepr * score;
+		}
+		b.rightfootswinging = false;
+	}
+
+	b.leftfootprevcontact = leftContact;
+	b.rightfootprevcontact = rightContact;
+	return reward;
+}
+__device__ float degval(part& p) {
+	return expf(-0.5f * (p.angle / 15.0f) * (p.angle / 15.0f));
+}
+__device__ float kneeStraightness(part& thigh, part& shin) {
+	float angleDiff = (shin.angle - thigh.angle) * degtorad;
+	angleDiff = atan2f(sinf(angleDiff), cosf(angleDiff));
+	float normalizedDiff = angleDiff / (15.0f * degtorad);
+	return expf(-0.5f * normalizedDiff * normalizedDiff);
+}
+
+__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr, float distr, float yr, float reverse, float fr, float targetSpeed, float stepr, float slidingPenaltyWeight) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
 
-
+	body& b = d_body[i];
 
 	
 	float dead = d_body[i].alive ? aliver : -deadr;
@@ -528,29 +606,9 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, 
 	float feet = (d_body[i].leftfeettouching || d_body[i].rightfeettouching) ? feetr : 0.0f;
 
 	float olddist = d_body[i].olddist;
-	float dist = normalize(d_body[i].torso.pos.x -500.0f,maxdist,-maxdist);
-	float forward = 0.0f;
-	if (olddist < (d_body[i].torso.pos.x - 500.0f)) {
-		if (dist < 0.0f) {
-			forward = -(dist * distr) * fr;
-		}
-		else if(dist>0.0f){
-			forward = (dist*distr)*fr;
-		}
-	}
-		//(olddist < (d_body[i].torso.pos.x - 500.0f)) ? dist * fr : 0.0f;
-
-	//float d = (olddist > (d_body[i].torso.pos.x - 500.0f)) ?dist* ( - reverse) : 0.0f;
-	float backward = 0.0f;
-	if (olddist > (d_body[i].torso.pos.x - 500.0f)) {
-		if (dist < 0.0f) {
-			backward = (dist * distr) * reverse;
-		}
-		else if (dist > 0.0f) {
-			backward = -(dist * distr) * reverse;
-		}
-	}
-
+	float dist = d_body[i].torso.pos.x - startx;
+	float dx = dist - olddist;
+	float speed = dx / fmaxf(DT, 1e-4f);
 
 	if (d_body[i].torso.pos.x > maxdist || d_body[i].torso.pos.x < -maxdist) {
 		printf("WARNING: increase maxdist define or it will cause errors");
@@ -559,21 +617,39 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, 
 
 
 	float val = clamp(d_body[i].torso.pos.y / 535.0f, 0.0f, 1.0f);
+	
+	float kneePosture = kneeStraightness(b.leftthigh, b.leftshin)
+		+ kneeStraightness(b.rightthigh, b.rightshin);
+	float upright = degval(b.torso) + kneePosture;
+	bool hasSupport = d_body[i].leftfeettouching || d_body[i].rightfeettouching;
+	float progress = clamp(speed / fmaxf(targetSpeed, 1.0f), -1.0f, 1.0f);
+	progress *= progress < 0.0f ? reverse : fr;
+	float movementReward = d_body[i].alive && hasSupport
+		? distr * progress * upright
+		: 0.0f;
+	bool footSwinging = d_body[i].leftfootswinging || d_body[i].rightfootswinging;
+	float uncoordinatedForwardSpeed = clamp(speed / fmaxf(targetSpeed, 1.0f), 0.0f, 1.0f);
+	float slidingPenalty = d_body[i].alive && hasSupport && !footSwinging
+		? slidingPenaltyWeight * uncoordinatedForwardSpeed
+		: 0.0f;
+
 	float straight;
-	if (d_body[i].leftfeettouching || d_body[i].rightfeettouching) {
-		straight = val * yr;
+	if (hasSupport) {
+		// Keep a small balance signal, but don't let standing dominate sparse steps.
+		straight = 0.1f * (upright + val * yr);
 	}
-	if (!d_body[i].leftfeettouching && !d_body[i].rightfeettouching) {
+	else {
 		val = d_body[i].torso.pos.y / 535.0f;
 		float limit = 1.2f;//give headroom for small jumps
-		straight = val > limit ? -(val - limit)*yr:0.0f;
+		straight = val > limit ? -0.25f * (val - limit) * yr : 0.0f;
 	}
 		
+	float stepreward = steppingreward(d_body[i], stepr);
 		
 
 
 	
-	float sum = dead + feet + straight + forward+ backward;
+	float sum = dead + feet + straight + movementReward + stepreward - slidingPenalty;
 	float reward =sum;
 
 	d_body[i].olddist = d_body[i].torso.pos.x - 500.0f;
@@ -581,7 +657,7 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, 
 
 	buffer[bidx].reward = reward;
 
-	atomicAdd(&d_reward, reward);
+	
 	if (!d_body[i].alive) {
 		resetrobotidxkernel(d_body[i]);
 	}
@@ -654,49 +730,6 @@ __global__ void normalize_advantages(int n, replaybuffer* buffer, float mean, fl
 	if (i >= n) return;
 	buffer[i].advantage = (buffer[i].advantage - mean) / (std + 1e-8f);
 }
-__global__ void firstlayerfrozen(int n, int s, int* indices, const float* __restrict__ weights, const float* __restrict__ bias, float* nodevals, float* d_preact, replaybuffer* buffer, int nodedatasize)
-{
-	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	int b = blockIdx.y;
-	if (i >= n)return;
-
-
-
-	float x = bias[idx(0, i)];
-	for (int k = 0; k < inputs; k++) {
-		x += buffer[indices[s * batchsize + b]].s1[k] * weights[idx(0 + i * inputs, k)];
-
-	}
-	int off = b * nodedatasize + i;
-	d_preact[off] = x;
-	nodevals[off] = leakyrelu(x);
-
-}
-__global__ void solvefrozenlayers(int n, int nin, int w, int D, int b, int p, bool isout, int* indices, const float* __restrict__ dWeights, const float* __restrict__ dBias, float* dNodeData, float* preact, int nodedatasize) {
-
-
-
-	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	int B = blockIdx.y;
-	if (i >= n)return;
-
-
-	float val = dBias[idx(b, i)];
-
-	for (int j = 0; j < nin; j++) {
-		float v = dNodeData[B * nodedatasize + p + j];
-		val += v * dWeights[w + i * nin + j];
-	}
-	int off = B * nodedatasize + D + i;
-	preact[off] = val;
-	dNodeData[off] = isout ? val : leakyrelu(val);
-
-
-}
-__device__ float normalize(float x, float max, float min) {
-	return ((x - min) / (max - min)) * 2.0f - 1.0f;
-	//[-1,1] bounded for better normalization for values in a rnage
-}
 __device__ float boolTofloat(bool x) {
 	
 	return x ? 1.0f : 0.0f;
@@ -711,7 +744,7 @@ __device__ void fill_partinput(int i, float* input, part& p) {
 	input[i+5] = normalize(p.angvel,maxangvel,-maxangvel);
 	input[i+6] = p.mass/ maxmass;
 	input[i+7] = p.inertia/maxinertia;
-	input[i+8] = p.torque/ maxtorque;
+	
 
 	
 }
@@ -749,22 +782,26 @@ __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights
 			float input[inputs] = { 0 };
 			input[0] = 0.125f;
 			fill_partinput(1, input, b.torso);
-			fill_partinput(10, input, b.leftthigh);
-			fill_partinput(19, input, b.rightthigh);
-			fill_partinput(28, input, b.leftshin);
-			fill_partinput(37, input, b.rightshin);
-			fill_partinput(46, input, b.leftfoot);
-			fill_partinput(55, input, b.rightfoot);
+			fill_partinput(9, input, b.leftthigh);
+			fill_partinput(17, input, b.rightthigh);
+			fill_partinput(25, input, b.leftshin);
+			fill_partinput(33, input, b.rightshin);
+			fill_partinput(41, input, b.leftfoot);
+			fill_partinput(49, input, b.rightfoot);
 
-			fill_jointinput(64, input, b.lefthip);
-			fill_jointinput(66, input, b.righthip);
-			fill_jointinput(68, input, b.leftknee);
-			fill_jointinput(70, input, b.rightknee);
-			fill_jointinput(72, input, b.leftankle);
-			fill_jointinput(74, input, b.rightankle);
-			input[76] = boolTofloat(b.leftfeettouching);
-				input[77] = boolTofloat(b.rightfeettouching);
-				input[78] = boolTofloat(b.torsotouchingground);
+			fill_jointinput(57, input, b.lefthip);
+			fill_jointinput(59, input, b.righthip);
+			fill_jointinput(61, input, b.leftknee);
+			fill_jointinput(63, input, b.rightknee);
+			fill_jointinput(65, input, b.leftankle);
+			fill_jointinput(67, input, b.rightankle);
+			input[69] = boolTofloat(b.leftfeettouching);
+				input[70] = boolTofloat(b.rightfeettouching);
+				input[71] = boolTofloat(b.torsotouchingground);
+				input[72] = boolTofloat(b.leftshintouching);
+				input[73] = boolTofloat(b.rightshintouching);
+				input[74] = boolTofloat(b.rightthightouching);
+				input[75] = boolTofloat(b.leftthightouching);
 
 
 				
@@ -819,25 +856,98 @@ __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights
 
 
 }
-__global__ void getdone(int n, body* b, replaybuffer* buffer, int s) {
+__global__ void getdone(int n, body* b, replaybuffer* buffer, int s,bool ld) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
-	if (b[i].torsotouchingground ) {
 
-		buffer[bidx].done = true;
-		b[i].alive = false;
+	if (!ld) {
+		if (b[i].torsotouchingground || b[i].torso.pos.x < -100.0f) {
+
+			buffer[bidx].done = true;
+			b[i].alive = false;
+		}
+
+		else {
+			buffer[bidx].done = false;
+			b[i].alive = true;
+		}
 	}
 	else {
-		buffer[bidx].done = false;
-		b[i].alive = true;
+
+		if (b[i].torsotouchingground || b[i].leftshintouching || b[i].rightshintouching
+			|| b[i].leftthightouching || b[i].rightthightouching || b[i].torso.pos.x < -100.0f) {
+
+			buffer[bidx].done = true;
+			b[i].alive = false;
+		}
+		else {
+			buffer[bidx].done = false;
+			b[i].alive = true;
+		}
+	}
+
+	if (b[i].torso.pos.x > maxdist) {
+		printf(" max dist reached \n");
+		resetrobotidxkernel(b[i]);
+	}
+
+}
+//learner net
+__global__ void firstlayerfrozen(int n,const int s,const int* __restrict__ indices, const float* __restrict__ weights, const float* __restrict__ bias, float* nodevals, float* d_preact,const replaybuffer* __restrict__ buffer,const int nodedatasize,int batchsize)
+{
+	__shared__ float s_in[inputs];
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	int B = blockIdx.y;
+
+	const replaybuffer* rb = buffer + indices[s * batchsize + B];
+	for (int k = threadIdx.x; k < inputs; k += blockDim.x) s_in[k] = rb->s1[k];
+	__syncthreads();
+
+	if (i >= n)return;
+
+
+
+	float x = bias[ i];
+
+#pragma unroll 4
+	for (int k = 0; k < inputs; k++) x = fmaf(s_in[k], weights[k * n + i], x);   
+
+	const int off = B * nodedatasize + i;
+	d_preact[off] = x;
+	nodevals[off] = leakyrelu(x);
+
+}
+__global__ void solvefrozenlayers(int n,const int nin,const int w,const int D,const int b,const int p,const bool isout,const int* __restrict__ indices, const float* __restrict__ dWeights, const float* __restrict__ dBias, float* dNodeData, float* preact, int nodedatasize) {
+
+
+
+	const int lane = threadIdx.x & 31;
+	const int i = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);   
+	const int B = blockIdx.y;
+	if (i >= n) return;
+	const float* in = dNodeData + B * nodedatasize + p;   
+	const float* wr = dWeights + w + i * nin;
+
+
+	float acc = 0.0f;
+#pragma unroll 4
+	for (int j = lane; j < nin; j += 32) acc = fmaf(in[j], wr[j], acc);
+
+#pragma unroll
+	for (int o = 16; o > 0; o >>= 1) acc += __shfl_xor_sync(0xffffffffu, acc, o);
+
+	if (lane == 0) {
+		const float val = acc + dBias[b + i];
+		const int off = B * nodedatasize + D + i;
+		preact[off] = val;
+		dNodeData[off] = isout ? val : leakyrelu(val);
 	}
 
 }
 
-
 void checkdone(int step) {
-	getdone << <blocks(robot_count), threads >> > (robot_count, d_bodies, d_state, step);
+	getdone << <blocks(robot_count), threads >> > (robot_count, d_bodies, d_state, step,legalive);
 }
 void normalize_advantages() {
 
@@ -864,15 +974,15 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 	auto& layerdata = (isactor) ? actor_layerdata : critic_layerdata;
 	int layers = (isactor) ? actor_layers : critic_layers;
 
-	int l1blocks = (layerdata[0].Nout + threads - 1) / threads;
+	int l1blocks = (layerdata[0].Nout + 128 - 1) / 128;
 	int w = layerdata[0].wIdx;
 	dim3 grid(l1blocks, curbatch);
 
 	if (isactor) {
-		firstlayerfrozen << <grid, threads >> > (layerdata[0].Nout, s, d_indices, d_actor_weights, d_actor_bias, d_actor_nodvals, d_actor_preact, d_state, actor_nodedatasize);
+		firstlayerfrozen << <grid, layerdata[0].Nout >> > (layerdata[0].Nout, s, d_indices, d_actor_weights, d_actor_bias, d_actor_nodvals, d_actor_preact, d_state, actor_nodedatasize,hbatchsize);
 	}
 	else {
-		firstlayerfrozen << <grid, threads >> > (layerdata[0].Nout, s, d_indices, d_critic_weights, d_critic_bias, d_critic_nodvals, d_critic_preact, d_state, critic_nodedatasize);
+		firstlayerfrozen << <grid, layerdata[0].Nout >> > (layerdata[0].Nout, s, d_indices, d_critic_weights, d_critic_bias, d_critic_nodvals, d_critic_preact, d_state, critic_nodedatasize,hbatchsize);
 
 	}
 
@@ -890,14 +1000,17 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 		int p = layerdata[l - 1].dIdx;
 
 		bool isout = (l == layers - 1);
-		dim3 grid2(Blocks, curbatch);
+		int n = layerdata[l].Nout;
+		int tpb = n <= 32 ? 32 : (n <= 64 ? 64 : 128);
+		int blocks = (n + tpb - 1) / tpb;
+		dim3 grid2(blocks, curbatch);
 		if (isactor) {
 
-			solvefrozenlayers << <grid2, threads >> > (layerdata[l].Nout, nin, wl, d, b, p, isout, d_indices, d_actor_weights, d_actor_bias, d_actor_nodvals, d_actor_preact, actor_nodedatasize);
+			solvefrozenlayers << <grid2, tpb >> > (layerdata[l].Nout, nin, wl, d, b, p, isout, d_indices, d_actor_weights, d_actor_bias, d_actor_nodvals, d_actor_preact, actor_nodedatasize);
 		}
 		else {
 
-			solvefrozenlayers << <grid2, threads >> > (layerdata[l].Nout, nin, wl, d, b, p, isout, d_indices, d_critic_weights, d_critic_bias, d_critic_nodvals, d_critic_preact, critic_nodedatasize);
+			solvefrozenlayers << <grid2, tpb >> > (layerdata[l].Nout, nin, wl, d, b, p, isout, d_indices, d_critic_weights, d_critic_bias, d_critic_nodvals, d_critic_preact, critic_nodedatasize);
 		}
 
 
@@ -906,12 +1019,12 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 	if (isactor) {
 		int outd = layerdata[actor_layers - 1].dIdx;
 
-		getlog << <blocks(curbatch), threads >> > (curbatch, outd, d_indices, d_state, s, d_actor_nodvals, actor_nodedatasize);
+		getlog << <blocks(curbatch), threads >> > (curbatch, outd, d_indices, d_state, s, d_actor_nodvals, actor_nodedatasize,hbatchsize);
 	}
 
 }
 void reward(int s) {
-	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, alive, dead,  feettouching,distr,yup,reversepenalty,forwardr);
+	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, alive, dead, feettouching, distr, yup, reversepenalty, forwardr, targetForwardSpeed, steppingRewardWeight, slidingPenaltyWeight);
 
 
 
@@ -942,42 +1055,39 @@ void backpropogation(int s, int curBatch, bool isactor) {
 
 		bool outlayer = (l == layers - 1) ? 1 : 0;
 
-		int blocks = (n + threads - 1) / threads;
+		int tpb = n <= 32 ? 32 : (n <= 64 ? 64 : 128);
+		int blocks = (n + tpb - 1) / tpb;
 		dim3 grid(blocks, curBatch);
 		if (isactor) {
-			compute_delta << <grid, threads >> > (n, d, l1out, l1w, l1nin, l1d, outlayer, isactor,
-				d_actor_nodvals, d_actor_delta, d_actor_weights, d_actor_preact, d_state, s, d_indices, actor_nodedatasize, rolloutstep);
+			compute_delta << <grid, tpb >> > (n, d, l1out, l1w, l1nin, l1d, outlayer, isactor,
+				d_actor_nodvals, d_actor_delta, d_actor_weights, d_actor_preact, d_state, s, d_indices, actor_nodedatasize, rolloutstep,hbatchsize);
 		}
 		else {
 
-			compute_delta << <grid, threads >> > (n, d, l1out, l1w, l1nin, l1d, outlayer, isactor,
-				d_critic_nodvals, d_critic_delta, d_critic_weights, d_critic_preact, d_state, s, d_indices, critic_nodedatasize, rolloutstep);
+			compute_delta << <grid, tpb >> > (n, d, l1out, l1w, l1nin, l1d, outlayer, isactor,
+				d_critic_nodvals, d_critic_delta, d_critic_weights, d_critic_preact, d_state, s, d_indices, critic_nodedatasize, rolloutstep,hbatchsize);
 		}
 
 
 	}
 
-	for (int l = layers - 1; l >= 0; l--) {
-		int blocks = (layerdata[l].Nout + threads - 1) / threads;
-		int nin = layerdata[l].Nin;
-		int l1d = (l == 0) ? 0 : layerdata[l - 1].dIdx;
-		int lw = layerdata[l].wIdx;
-		int lsize = (l == 0) ? inputs : layerdata[l].Nin;
-		int d = layerdata[l].dIdx;
-		int lb = layerdata[l].bIdx;
-
-		if (isactor) {
-			tuneweights << <blocks, threads >> > (layerdata[l].Nout, nin, l, l1d, lw, lsize, d, lb, lr,
-				d_actor_nodvals, d_actor_weights, d_actor_delta, d_actor_bias, d_state, s, curBatch, actor_nodedatasize, d_indices, true, actor_adam_weights, actor_adam_bias, adam_step);
-		}
-		else {
-			tuneweights << <blocks, threads >> > (layerdata[l].Nout, nin, l, l1d, lw, lsize, d, lb, lr,
-				d_critic_nodvals, d_critic_weights, d_critic_delta, d_critic_bias, d_state, s, curBatch, critic_nodedatasize, d_indices, false, critic_adam_weights, critic_adam_bias, adam_step);
-		}
-
-
-
-	}
+		float beta1 = 0.9f;
+		float beta2 = 0.999f;
+		float betat1 = 1.0f / (1.0f - powf(beta1, adam_step));
+		float betat2 = 1.0f / (1.0f - powf(beta2, adam_step));
+		int rows = layerdata[0].Nin;                     
+		for (int l = 1; l < layers; l++) rows += layerdata[l].Nout;   
+		const size_t smem = curBatch * sizeof(float);
+		if (isactor)
+			tuneweights << <rows, 128, smem >> > (d_actlayer, curBatch, s, actor_nodedatasize,
+				d_actor_nodvals, d_actor_delta, d_state, d_indices,
+				d_actor_weights, d_actor_bias, actor_adam_weights, actor_adam_bias,
+				lr, beta1, beta2, betat1, betat2,hbatchsize);
+		else
+			tuneweights << <rows, 128, smem >> > (d_critlayer, curBatch, s, critic_nodedatasize,
+				d_critic_nodvals, d_critic_delta, d_state, d_indices,
+				d_critic_weights, d_critic_bias, critic_adam_weights, critic_adam_bias,
+				lr, beta1, beta2, betat1, betat2,hbatchsize);
 
 
 }
@@ -1008,11 +1118,11 @@ void net(int s, bool isactor) {
 
 }
 
-void run_network() {
+void run_network(float dt) {
 
 	net(step, true);//actor forward pass
 	net(step, false);//critic forward pass
-	updateRobot();
+	updateRobot(dt);
 	checkdone(step);
 	reward(step);
 	float h_reward = 0.0f;
@@ -1053,9 +1163,7 @@ void run_network() {
 
 
 
-			err = cudaMemcpyFromSymbol(&h_reward, d_reward, sizeof(float));
-			cudaMemcpyToSymbol(d_reward, &zero, sizeof(float));
-			geterror("reward cpy from symbol", err);
+		
 		}
 		auto end = std::chrono::steady_clock::now();
 
@@ -1073,8 +1181,8 @@ void shuffleindices() {
 		shuffled_indices[i] = i;
 	}
 	std::shuffle(shuffled_indices.begin(), shuffled_indices.end(), shuffleRng);
-	cudaMemcpy(d_indices, shuffled_indices.data(), replaybuffersize * sizeof(int), cudaMemcpyHostToDevice);
-	cudaError_t err = cudaGetLastError();
+	cudaError_t err =cudaMemcpy(d_indices, shuffled_indices.data(), replaybuffersize * sizeof(int), cudaMemcpyHostToDevice);
+	
 	geterror("indices copy", err);
 }
 
