@@ -64,12 +64,13 @@ int main()
 		cx = (tx > 0.0f) ? cx : tx+950.0f;
 		renderRobot();
 		renderUI();
-
-		if (timer >= gentime) {
-			timer -= gentime;
-			gen++;
-			cx = 950.0f;
-			resetrobots();
+		if (autoreset) {
+			if (timer >= gentime) {
+				timer -= gentime;
+				gen++;
+				cx = 950.0f;
+				resetrobots();
+			}
 		}
 		noRender.swapBuffers();
 

@@ -539,9 +539,14 @@ __device__ float normalize(float x, float max, float min) {
 __device__ float steppingreward(body& b,float stepr) {
 	if (!b.alive)
 		return 0.0f;
-
-	constexpr float minimumStep = 10.0f;
+	//< this function is written by ai >
+	//                              
+	// Reward committed foot placements, not contact chatter.  These are in
+	// world-space pixels, so the reward cannot be manufactured by rocking the
+	// torso beneath an otherwise stationary foot.
+	constexpr float minimumCommittedStep = 25.0f;
 	constexpr float fullRewardStep = 80.0f;
+	constexpr float fullLandingLead = 20.0f;
 	float reward = 0.0f;
 	bool leftContact = b.leftfeettouching;
 	bool rightContact = b.rightfeettouching;
@@ -549,32 +554,42 @@ __device__ float steppingreward(body& b,float stepr) {
 	// Record lift-off only while the other foot is supporting the robot.
 	if (b.leftfootprevcontact && !leftContact && rightContact) {
 		b.leftfootswinging = true;
-		b.leftfoottakeoffrelx = b.leftfoot.pos.x - b.torso.pos.x;
+		b.leftfoottakeoffrelx = b.leftfoot.pos.x;
 	}
 	if (b.rightfootprevcontact && !rightContact && leftContact) {
 		b.rightfootswinging = true;
-		b.rightfoottakeoffrelx = b.rightfoot.pos.x - b.torso.pos.x;
+		b.rightfoottakeoffrelx = b.rightfoot.pos.x;
 	}
 
-	// Pay once, on landing, for placing the swinging foot farther forward
-	// relative to the torso while the opposite foot remains in contact.
+	// A walking step keeps the opposite foot planted throughout the swing.
+	// Do not pay a later touchdown after a flight phase or a contact glitch.
+	if (b.leftfootswinging && !rightContact)
+		b.leftfootswinging = false;
+	if (b.rightfootswinging && !leftContact)
+		b.rightfootswinging = false;
+
+	// Pay once at a supported touchdown.  A foot must travel forward and land
+	// ahead of the stance foot; the squared score makes one deliberate stride
+	// more valuable per unit distance than several short, rapid shuffles.
 	if (b.leftfootswinging && !b.leftfootprevcontact && leftContact) {
 		if (rightContact) {
-			float landingRelX = b.leftfoot.pos.x - b.torso.pos.x;
-			float forwardStride = landingRelX - b.leftfoottakeoffrelx;
-			float score = clamp((forwardStride - minimumStep) /
-				(fullRewardStep - minimumStep), 0.0f, 1.0f);
-			reward += stepr * score;
+			float forwardTravel = b.leftfoot.pos.x - b.leftfoottakeoffrelx;
+			float landingLead = b.leftfoot.pos.x - b.rightfoot.pos.x;
+			float strideScore = clamp((forwardTravel - minimumCommittedStep) /
+				(fullRewardStep - minimumCommittedStep), 0.0f, 1.0f);
+			float placementScore = clamp(landingLead / fullLandingLead, 0.0f, 1.0f);
+			reward += stepr * strideScore * strideScore * placementScore;
 		}
 		b.leftfootswinging = false;
 	}
 	if (b.rightfootswinging && !b.rightfootprevcontact && rightContact) {
 		if (leftContact) {
-			float landingRelX = b.rightfoot.pos.x - b.torso.pos.x;
-			float forwardStride = landingRelX - b.rightfoottakeoffrelx;
-			float score = clamp((forwardStride - minimumStep) /
-				(fullRewardStep - minimumStep), 0.0f, 1.0f);
-			reward += stepr * score;
+			float forwardTravel = b.rightfoot.pos.x - b.rightfoottakeoffrelx;
+			float landingLead = b.rightfoot.pos.x - b.leftfoot.pos.x;
+			float strideScore = clamp((forwardTravel - minimumCommittedStep) /
+				(fullRewardStep - minimumCommittedStep), 0.0f, 1.0f);
+			float placementScore = clamp(landingLead / fullLandingLead, 0.0f, 1.0f);
+			reward += stepr * strideScore * strideScore * placementScore;
 		}
 		b.rightfootswinging = false;
 	}
@@ -627,10 +642,27 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, 
 	float movementReward = d_body[i].alive && hasSupport
 		? distr * progress * upright
 		: 0.0f;
-	bool footSwinging = d_body[i].leftfootswinging || d_body[i].rightfootswinging;
-	float uncoordinatedForwardSpeed = clamp(speed / fmaxf(targetSpeed, 1.0f), 0.0f, 1.0f);
-	float slidingPenalty = d_body[i].alive && hasSupport && !footSwinging
-		? slidingPenaltyWeight * uncoordinatedForwardSpeed
+	// Penalize only the horizontal motion of a foot that is meant to be planted.
+	// Torso speed is not a slip signal: a correct gait moves the torso forward
+	// while its stance foot is nearly stationary in world space.
+	float plantedFootSlip = 0.0f;
+	int plantedFeet = 0;
+	if (d_body[i].leftfeettouching && !d_body[i].leftfootswinging) {
+		plantedFootSlip += fabsf(d_body[i].leftfoot.vel.x);
+		plantedFeet++;
+	}
+	if (d_body[i].rightfeettouching && !d_body[i].rightfootswinging) {
+		plantedFootSlip += fabsf(d_body[i].rightfoot.vel.x);
+		plantedFeet++;
+	}
+	// Ignore sub-pixel contact-solver jitter, then scale genuine skating by the
+	// commanded walking speed.  Averaging prevents double support from paying
+	// twice for the same amount of slip.
+	float averageFootSlip = plantedFeet > 0 ? plantedFootSlip / plantedFeet : 0.0f;
+	float normalizedSlip = clamp((averageFootSlip - 3.0f) /
+		fmaxf(targetSpeed, 1.0f), 0.0f, 1.0f);
+	float slidingPenalty = d_body[i].alive
+		? slidingPenaltyWeight * normalizedSlip
 		: 0.0f;
 
 	float straight;
@@ -751,6 +783,17 @@ __device__ void fill_partinput(int i, float* input, part& p) {
 __device__ void fill_jointinput(int i, float* input, joint& j) {
 	input[i] = normalize(j.targetangle,j.maxangle,j.minangle);
 	input[i + 1] = j.strength / maxjointstrength;
+	float relativeAngle = (j.child->angle - j.parent->angle) * degtorad;
+	relativeAngle = atan2f(sinf(relativeAngle), cosf(relativeAngle)) * radtodeg;
+	input[i + 2] = normalize(relativeAngle, j.maxangle, j.minangle);
+
+	float relativeAngvel = j.child->angvel - j.parent->angvel;
+	input[i + 3] = clamp(relativeAngvel / (2.0f * maxangvel), -1.0f, 1.0f);
+
+	float target = clamp(j.targetangle, j.minangle, j.maxangle);
+	float targetError = (target - relativeAngle) * degtorad;
+	targetError = atan2f(sinf(targetError), cosf(targetError)) * radtodeg;
+	input[i + 4] = clamp(targetError / (j.maxangle - j.minangle), -1.0f, 1.0f);
 }
 
 
@@ -790,18 +833,18 @@ __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights
 			fill_partinput(49, input, b.rightfoot);
 
 			fill_jointinput(57, input, b.lefthip);
-			fill_jointinput(59, input, b.righthip);
-			fill_jointinput(61, input, b.leftknee);
-			fill_jointinput(63, input, b.rightknee);
-			fill_jointinput(65, input, b.leftankle);
-			fill_jointinput(67, input, b.rightankle);
-			input[69] = boolTofloat(b.leftfeettouching);
-				input[70] = boolTofloat(b.rightfeettouching);
-				input[71] = boolTofloat(b.torsotouchingground);
-				input[72] = boolTofloat(b.leftshintouching);
-				input[73] = boolTofloat(b.rightshintouching);
-				input[74] = boolTofloat(b.rightthightouching);
-				input[75] = boolTofloat(b.leftthightouching);
+			fill_jointinput(62, input, b.righthip);
+			fill_jointinput(67, input, b.leftknee);
+			fill_jointinput(72, input, b.rightknee);
+			fill_jointinput(77, input, b.leftankle);
+			fill_jointinput(82, input, b.rightankle);
+			input[87] = boolTofloat(b.leftfeettouching);
+			input[88] = boolTofloat(b.rightfeettouching);
+			input[89] = boolTofloat(b.torsotouchingground);
+			input[90] = boolTofloat(b.leftshintouching);
+			input[91] = boolTofloat(b.rightshintouching);
+			input[92] = boolTofloat(b.rightthightouching);
+			input[93] = boolTofloat(b.leftthightouching);
 
 
 				

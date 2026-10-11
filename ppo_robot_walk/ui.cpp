@@ -59,7 +59,21 @@ void renderUI() {
 	if (training) { ImGui::InputInt("rollout epochs", &rollout_epoch, 1, 100); }
 
 	ImGui::Checkbox("death on knee", &legalive);
-
+	ImGui::Checkbox("add jitter", &addjitter);
+	if (addjitter) {
+		ImGui::DragFloat("jitter magnitude", &magnitude, 10.0f, 0.0f, 5000.0f);
+		ImGui::DragFloat("jitter threshold", &threshold, 0.01f, 0.05f, 10.0f);
+	}
+	ImGui::Checkbox("auto reset robot", &autoreset);
+	if (!autoreset) {
+		if (ImGui::Button("reset robots")) {
+			timer -= gentime;
+			gen++;
+			cx = 950.0f;
+			resetrobots();
+		}
+	}
+	ImGui::Spacing();
 	ImGui::Text("rewards");
 	ImGui::DragFloat("alive reward", &alive, 0.01f, 0.0f, 100.0f);
 	ImGui::DragFloat("dead penalty", &dead, 0.01f, 0.0f, 100.0f);
@@ -109,6 +123,9 @@ namespace {
 			{ "targetForwardSpeed",   SettingEntry::Float, &targetForwardSpeed },
 			{ "steppingRewardWeight", SettingEntry::Float, &steppingRewardWeight },
 			{ "slidingPenaltyWeight", SettingEntry::Float, &slidingPenaltyWeight },
+			{ "addjitter",            SettingEntry::Bool,  &addjitter },
+			{ "magnitude",            SettingEntry::Float, &magnitude },
+			{ "threshold",            SettingEntry::Float, &threshold },
 		};
 		return table;
 	}

@@ -391,6 +391,9 @@ void intigratepart(part& p,float dt=DT){
 	p.force.y =   -G * p.mass;
 	p.vel.x += (p.force.x * p.invmass) * dt;
 	p.vel.x = clamp(p.vel.x, -maxvel, maxvel);
+	// Horizontal forces are one-step inputs.  Leaving them in the accumulator
+	// turns a single jitter event into an ever-increasing constant push.
+	p.force.x = 0.0f;
 	p.vel.y += (p.force.y * p.invmass) * dt;
 	p.vel.y = clamp(p.vel.y, -maxvel, maxvel);
 	// Mild linear drag prevents horizontal momentum from persisting indefinitely.
@@ -622,7 +625,7 @@ float getjointangleerror(joint& j)
 }
 
 __device__ __host__
-void solvecontacts(part& p) {
+void solvecontacts(part& p, float friction) {
 	float2 contact[2];
 	int contactCorner[2];
 	int count = getfloorcontacts(p, contact, contactCorner);
@@ -631,7 +634,7 @@ void solvecontacts(part& p) {
 		int corner = contactCorner[i];
 		activeCorner[corner] = true;
 		float normalimpulse = solvefloorcontact(p, contact[i], corner);
-		solvefloorfriction(p, contact[i], 1.0f, normalimpulse, corner);
+		solvefloorfriction(p, contact[i], friction, normalimpulse, corner);
 
 	}
 	for (int corner = 0; corner < 4; ++corner) {
@@ -912,7 +915,11 @@ void floorcolision(body& b) {
 	};
 	for (int p = 0; p < 7; ++p) {
 		floorcolisionpart(*parts[p]);
-		solvecontacts(*parts[p]);
+		// Feet are the intended supports.  Give them enough static friction to
+		// resist motor and solver impulses instead of letting a planted foot skate.
+		float friction = (parts[p] == &b.leftfoot || parts[p] == &b.rightfoot)
+			? 2.5f : 1.0f;
+		solvecontacts(*parts[p], friction);
 	}
 
 	
@@ -1064,6 +1071,14 @@ void floorcolision(body& b) {
 				}
 			}
 		}
+		// Inter-part collision resolution can add horizontal velocity after the
+		// first floor solve.  Reapply the existing floor constraints so the final
+		// state of this iteration keeps supported feet planted.
+		for (int p = 0; p < 7; ++p) {
+			float friction = (parts[p] == &b.leftfoot || parts[p] == &b.rightfoot)
+				? 2.5f : 1.0f;
+			solvecontacts(*parts[p], friction);
+		}
 	}
 }
 __device__ __host__ 
@@ -1163,7 +1178,40 @@ __global__ void istouching(int n, body* robot) {
 		b.rightthightouching = false;
 	}
 }
+
+__device__ float randf(float mag, unsigned int& seed) {
+	seed ^= seed << 13;
+	seed ^= seed >> 17;
+	seed ^= seed << 5;
+	float min = -mag;
+	float max = mag;
+	float u = (seed >> 8) * (1.0f / 16777216.0f);
+	return min + u * (max - min);
+}
+__device__ void jitter(part& p,float mag,unsigned int seed) {
+	float v = randf(mag, seed);
+	p.force.x += v * p.mass;
+}
+__global__ void jitterkernel(int n, body* robot,float mag, unsigned int event) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= n)return;
+	
+	unsigned int seed = (unsigned int)(i + 1) * 0x9E3779B9u ^ event * 0x85EBCA6Bu;
+	jitter(robot[i].torso,mag,seed);
+
+}
+float h_threshold = 0.0f;
+unsigned int h_jitterEvent = 0;
 void updateRobot(float dt) {
+
+	if (addjitter&& h_threshold>= threshold) {
+		jitterkernel << <blocks(robot_count), threads >> > (robot_count, d_bodies, magnitude, ++h_jitterEvent);
+		h_threshold = 0.0f;
+	}
+	else {
+		h_threshold += DT;
+	}
+
 	static float accumulator = 0.0f;
 	accumulator += clamp(dt, 0.0f, 0.1f);
 	while (accumulator >= DT) {

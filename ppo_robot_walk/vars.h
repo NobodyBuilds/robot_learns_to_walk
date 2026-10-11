@@ -13,7 +13,7 @@
 #define degtorad PI/180.0f
 #define radtodeg 180.0f/PI
 #define maxjointstrength 5.0f
-#define inputs 76
+#define inputs 94
 #define output 12
 #define maxvel 1000.0f
 #define maxangvel 1000.0f 
@@ -95,9 +95,11 @@ inline int robot_count =1;
 inline int sample_robot_count = 1;
 inline bool dummyQuad = false;
 inline bool dummyCircle = false;
-
-
-
+inline bool addjitter = false;
+// Horizontal acceleration (pixels/s^2) and interval (seconds) for balance perturbations.
+inline float magnitude = 50000.0f;
+inline float threshold = 1.0f;
+inline bool autoreset = false;
 
 
 inline __device__ __host__ float clamp(float val, float min, float max) {
