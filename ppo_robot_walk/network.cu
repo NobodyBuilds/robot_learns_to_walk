@@ -1002,7 +1002,8 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 		bool isout = (l == layers - 1);
 		int n = layerdata[l].Nout;
 		int tpb = n <= 32 ? 32 : (n <= 64 ? 64 : 128);
-		int blocks = (n + tpb - 1) / tpb;
+		const int warpsPerBlock = tpb / 32;
+		int blocks = (n + warpsPerBlock - 1) / warpsPerBlock;
 		dim3 grid2(blocks, curbatch);
 		if (isactor) {
 
@@ -1070,11 +1071,13 @@ void backpropogation(int s, int curBatch, bool isactor) {
 
 
 	}
+	const int t = isactor ? actor_adam_step++ : critic_adam_step++;
 
-		float beta1 = 0.9f;
-		float beta2 = 0.999f;
-		float betat1 = 1.0f / (1.0f - powf(beta1, adam_step));
-		float betat2 = 1.0f / (1.0f - powf(beta2, adam_step));
+	float beta1 = 0.9f;
+	float beta2 = 0.999f;
+	float betat1 = 1.0f / (1.0f - powf(beta1, t));
+	float betat2 = 1.0f / (1.0f - powf(beta2, t));
+		
 		int rows = layerdata[0].Nin;                     
 		for (int l = 1; l < layers; l++) rows += layerdata[l].Nout;   
 		const size_t smem = curBatch * sizeof(float);
@@ -1159,7 +1162,6 @@ void run_network(float dt) {
 			shuffleindices();
 			frozennet(false);//critic backprop
 			frozennet(true);//actor backprop
-			adam_step++;
 
 
 
@@ -1275,7 +1277,8 @@ void restart() {
 	critic_biassize = 0;
 	actor_nodedatasize = 0;
 	rolloutstep = 0;
-	adam_step = 1;
+	actor_adam_step = 1;
+	critic_adam_step = 1;
 	step = 0;
 	gen = 0;
 	replaybuffersize = robot_count * 2048;

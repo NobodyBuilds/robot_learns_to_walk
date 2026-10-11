@@ -129,7 +129,8 @@ inline float h_dt = 1.0f / 120.0f;
 inline int actor_layers;
 inline int critic_layers;
 inline int rollout_epoch = 2;
-inline int adam_step = 1;
+inline int actor_adam_step = 1;
+inline int critic_adam_step = 1;
 inline bool training = false;
 inline bool run_ai = false;
 
