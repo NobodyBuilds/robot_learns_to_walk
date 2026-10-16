@@ -28,6 +28,12 @@ int main()
 	noRender.movementSpeed = 20.0f;
 	//registervbo(robot_count);
 	loadsettings();
+	// Settings are loaded before the CUDA buffers are created.  Previously the
+	// saved sample count only took effect after pressing Restart, leaving a
+	// supposedly 64-environment run with one robot and a malformed rollout.
+	if (sample_robot_count < 1) sample_robot_count = 1;
+	robot_count = sample_robot_count;
+	replaybuffersize = robot_count * 2048;
 	initrobot(robot_count);
 	initnetwork();
 	initfloor();
@@ -49,16 +55,31 @@ int main()
 		noRender.pollEvents();
 		noRender.clearScreen(br, bg, bb);
 		simulationAccumulator += clamp(static_cast<float>(frameTime), 0.0f, 0.1f);
-		while (simulationAccumulator >= DT) {
+		if (!fasttrain) {
+			while (simulationAccumulator >= DT) {
+				if (run_ai) {
+					run_network(DT);
+				}
+				else {
+					updateRobot(DT);
+				}
+				simulationAccumulator -= DT;
+			}
+		}
+		else {
 			if (run_ai) {
 				run_network(DT);
 			}
 			else {
 				updateRobot(DT);
 			}
-			simulationAccumulator -= DT;
 		}
-		timer += static_cast<float>(frameTime);
+		if (!fasttrain) { timer += static_cast<float>(frameTime);
+		}
+		else {
+
+		timer += DT;
+		}
 		renderfloor();
 		cx = (tx<950.0f)?950.0f:tx;
 		cx = (tx > 0.0f) ? cx : tx+950.0f;

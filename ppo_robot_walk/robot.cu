@@ -95,6 +95,8 @@ void initpart(float2 pos, float2 size, float3 col,float mass, part& p) {
 	for (int i = 0; i < 4; ++i) {
 		p.floorNormalImpulse[i] = 0.0f;
 		p.floorTangentImpulse[i] = 0.0f;
+		p.floorAnchorX[i] = 0.0f;
+		p.floorAnchorActive[i] = false;
 	}
 }
 __device__ __host__
@@ -104,7 +106,7 @@ void initjoint(part* parent, part* child, float2 parentanchor, float2 childancho
 	j.parentanchor = parentanchor;
 	j.childanchor = childanchor;
 	j.targetangle = 0.0f;
-	j.strength = 0.0f;
+	j.strength = minjointstrength;
 	j.minangle = minmax.x	;
 	j.maxangle = minmax.y;
 }
@@ -123,15 +125,20 @@ void setrobotdata(int n) {
 		initjoint(&robotdata[i].torso, &robotdata[i].rightthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, {-60,60}, robotdata[i].righthip);
 		initjoint(&robotdata[i].leftthigh, &robotdata[i].leftshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, {-90,90}, robotdata[i].leftknee);
 		initjoint(&robotdata[i].rightthigh, &robotdata[i].rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, {-90,90}, robotdata[i].rightknee);
-		initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, {-10,10}, robotdata[i].leftankle);
-		initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, {-10,10}, robotdata[i].rightankle);
+		initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, {-35,35}, robotdata[i].leftankle);
+		initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, {-35,35}, robotdata[i].rightankle);
 		setforwardpose(robotdata[i]);
+		robotdata[i].olddist = startx;
+		float feetDx = robotdata[i].leftfoot.pos.x - robotdata[i].rightfoot.pos.x;
+		float feetDy = robotdata[i].leftfoot.pos.y - robotdata[i].rightfoot.pos.y;
+		robotdata[i].feetdist = sqrtf(feetDx * feetDx + feetDy * feetDy) / 560.0f;
 		robotdata[i].leftfootprevcontact = false;
 		robotdata[i].rightfootprevcontact = false;
 		robotdata[i].leftfootswinging = false;
 		robotdata[i].rightfootswinging = false;
 		robotdata[i].leftfoottakeoffrelx = 0.0f;
 		robotdata[i].rightfoottakeoffrelx = 0.0f;
+		robotdata[i].lastStepFoot = 0;
 	}
 }
 __global__ void d_setrobotdata(int n, body* robotdata) {
@@ -149,14 +156,17 @@ __global__ void d_setrobotdata(int n, body* robotdata) {
 	initjoint(&robotdata[i].torso, &robotdata[i].rightthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata[i].righthip);
 	initjoint(&robotdata[i].leftthigh, &robotdata[i].leftshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].leftknee);
 	initjoint(&robotdata[i].rightthigh, &robotdata[i].rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata[i].rightknee);
-	initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -25,25 }, robotdata[i].leftankle);
-	initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -25,25 }, robotdata[i].rightankle);
+	initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -35,35 }, robotdata[i].leftankle);
+	initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -35,35 }, robotdata[i].rightankle);
 	setforwardpose(robotdata[i]);
+	float feetDx = robotdata[i].leftfoot.pos.x - robotdata[i].rightfoot.pos.x;
+	float feetDy = robotdata[i].leftfoot.pos.y - robotdata[i].rightfoot.pos.y;
+	robotdata[i].feetdist = sqrtf(feetDx * feetDx + feetDy * feetDy) / 560.0f;
 	robotdata[i].alive = true;
 	robotdata[i].torsotouchingground = false;
 	robotdata[i].leftfeettouching = false;
 	robotdata[i].rightfeettouching = false;
-	robotdata[i].olddist = 0.0f;
+	robotdata[i].olddist = startx;
 	robotdata[i].leftshintouching = false;
 	robotdata[i].rightshintouching = false;
 	robotdata[i].leftthightouching = false;
@@ -167,8 +177,7 @@ __global__ void d_setrobotdata(int n, body* robotdata) {
 	robotdata[i].rightfootswinging = false;
 	robotdata[i].leftfoottakeoffrelx = 0.0f;
 	robotdata[i].rightfoottakeoffrelx = 0.0f;
-
-
+	robotdata[i].lastStepFoot = 0;
 }
 __device__ void resetrobotidxkernel( body& robotdata) {
 	body& b = robotdata;
@@ -183,13 +192,16 @@ __device__ void resetrobotidxkernel( body& robotdata) {
 	initjoint(&robotdata.torso, &robotdata.rightthigh, { 0.0f,-35.0f }, { 0.0f,75.0f }, { -60,60 }, robotdata.righthip);
 	initjoint(&robotdata.leftthigh, &robotdata.leftshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata.leftknee);
 	initjoint(&robotdata.rightthigh, &robotdata.rightshin, { 0.0f,-75.0f }, { 0.0f,75.0f }, { -90,90 }, robotdata.rightknee);
-	initjoint(&robotdata.leftshin, &robotdata.leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -25,25 }, robotdata.leftankle);
-	initjoint(&robotdata.rightshin, &robotdata.rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -25,25 }, robotdata.rightankle);
+	initjoint(&robotdata.leftshin, &robotdata.leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -35,35 }, robotdata.leftankle);
+	initjoint(&robotdata.rightshin, &robotdata.rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, { -35,35 }, robotdata.rightankle);
 	setforwardpose(robotdata);
+	float feetDx = robotdata.leftfoot.pos.x - robotdata.rightfoot.pos.x;
+	float feetDy = robotdata.leftfoot.pos.y - robotdata.rightfoot.pos.y;
+	b.feetdist = sqrtf(feetDx * feetDx + feetDy * feetDy) / 560.0f;
 	b.leftfeettouching = false;
 	b.rightfeettouching = false;
 	b.torsotouchingground = false;
-	b.olddist = 0.0f;
+	b.olddist = startx;
 	b.leftshintouching = false;
 	b.rightshintouching = false;
 	b.leftthightouching = false;
@@ -200,7 +212,8 @@ __device__ void resetrobotidxkernel( body& robotdata) {
 	b.rightfootswinging = false;
 	b.leftfoottakeoffrelx = 0.0f;
 	b.rightfoottakeoffrelx = 0.0f;
-	
+	b.lastStepFoot = 0;
+	b.alive = true;
 }
 
 static cudaGraphicsResource_t bodyres = nullptr;
@@ -583,6 +596,46 @@ void solvefloorfriction(part& p,float2 contact, float friction,float normalimpul
 
 	impulse(p, imp, r);
 }
+
+__device__ __host__
+void solvefloorstaticfriction(part& p) {
+	float2 contacts[2];
+	int contactCorners[2];
+	const int count = getfloorcontacts(p, contacts, contactCorners);
+	bool activeCorner[4] = { false, false, false, false };
+
+	for (int i = 0; i < count; ++i) {
+		const int corner = contactCorners[i];
+		activeCorner[corner] = true;
+		float2 corners[4];
+		getcorners(p, corners);
+		const float2 contact = corners[corner];
+		if (!p.floorAnchorActive[corner]) {
+			p.floorAnchorX[corner] = contact.x;
+			p.floorAnchorActive[corner] = true;
+			continue;
+		}
+
+		const float2 r = { contact.x - p.pos.x, contact.y - p.pos.y };
+		const float effectiveMass = p.invmass + r.y * r.y * p.invinertia;
+		if (effectiveMass <= 0.0f) continue;
+
+		// Keep the active floor point at the x position where it landed. Joint and
+		// body collision projections move positions directly, so impulse friction
+		// cannot see or oppose that movement on its own.
+		const float error = contact.x - p.floorAnchorX[corner];
+		const float correction = -error / effectiveMass;
+		p.pos.x += correction * p.invmass;
+		p.angle += (-r.y * correction * p.invinertia) * radtodeg;
+		p.angle = normalizeangle(p.angle);
+	}
+
+	for (int corner = 0; corner < 4; ++corner) {
+		if (!activeCorner[corner])
+			p.floorAnchorActive[corner] = false;
+	}
+}
+
 __device__ __host__
 void floorcolisionpart(part& p,float floorY=FLOOR_SURFACE_Y) {
 	
@@ -644,12 +697,43 @@ void solvecontacts(part& p, float friction) {
 		}
 	}
 }
+// A visual slide is motion at the toe/heel touching the floor, not necessarily
+// motion of the foot's center. Keep this calculation identical to the contact
+// solver so the learning signal cannot be evaded by rotating the foot.
+__device__ float footsupportload(part& p) {
+	float load = 0.0f;
+	for (int corner = 0; corner < 4; ++corner)
+		load += fmaxf(p.floorNormalImpulse[corner], 0.0f);
+	return load;
+}
+
+__device__ float footcontactslip(part& p) {
+	float2 contacts[2];
+	int contactCorners[2];
+	const int count = getfloorcontacts(p, contacts, contactCorners);
+	float weightedSlip = 0.0f;
+	float totalLoad = 0.0f;
+	for (int i = 0; i < count; ++i) {
+		const float load = fmaxf(p.floorNormalImpulse[contactCorners[i]], 0.0f);
+		if (load <= 1.0e-5f) continue;
+		const float2 r = { contacts[i].x - p.pos.x, contacts[i].y - p.pos.y };
+		weightedSlip += load * fabsf(getcontactvel(p, r).x);
+		totalLoad += load;
+	}
+	return totalLoad > 1.0e-5f ? weightedSlip / totalLoad : 0.0f;
+}
 __device__ __host__
 void solvejointmotor(joint& j) {
 	float error = getjointangleerror(j);
 
 	float strength = fmaxf(0.0f, fminf(j.strength, maxjointstrength));
-	float desiredangvel = error * (PI / 180.0f) * strength;
+	// The old controller made a +/-25 degree ankle inherently much slower than
+	// a +/-60 degree hip at the same action and strength. Preserve the larger
+	// joints' response while boosting only narrow-range joints up to hip-scale
+	// authority, so ankle targets are useful to the policy.
+	const float halfRange = 0.5f * (j.maxangle - j.minangle);
+	const float narrowJointBoost = fmaxf(1.0f, 60.0f / fmaxf(halfRange, 1.0f));
+	float desiredangvel = error * (PI / 180.0f) * strength * narrowJointBoost;
 
 	float relangvel = j.child->angvel - j.parent->angvel;
 
@@ -880,7 +964,7 @@ void solvejointlimits(joint& j)
 }
 
 __device__ __host__
-void solvejoints(body& b) {
+void solvejoints(body& b, bool driveMotors) {
 	
 		
 	solvejointposition(b.lefthip);
@@ -897,12 +981,18 @@ void solvejoints(body& b) {
 	solvejointlimits(b.leftankle);
 	solvejointlimits(b.rightankle);
 
-	solvejointmotor(b.lefthip);
-	solvejointmotor(b.righthip);
-	solvejointmotor(b.leftknee);
-	solvejointmotor(b.rightknee);
-	solvejointmotor(b.leftankle);
-	solvejointmotor(b.rightankle);
+	// Contacts need several iterations to remove the velocity a motor injects.
+	// Reapplying the velocity servo in every iteration kept fighting floor
+	// friction and made a planted foot skate. Drive once per physics step;
+	// the later passes are solely constraint/contact stabilization.
+	if (driveMotors) {
+		solvejointmotor(b.lefthip);
+		solvejointmotor(b.righthip);
+		solvejointmotor(b.leftknee);
+		solvejointmotor(b.rightknee);
+		solvejointmotor(b.leftankle);
+		solvejointmotor(b.rightankle);
+	}
 
 
 }
@@ -915,10 +1005,16 @@ void floorcolision(body& b) {
 	};
 	for (int p = 0; p < 7; ++p) {
 		floorcolisionpart(*parts[p]);
+		const bool isFoot = parts[p] == &b.leftfoot || parts[p] == &b.rightfoot;
+		if (isFoot) {
+			solvefloorstaticfriction(*parts[p]);
+			// The anchor correction can rotate a foot, so resolve its new lowest
+			// point before applying the velocity-level contact constraints.
+			floorcolisionpart(*parts[p]);
+		}
 		// Feet are the intended supports.  Give them enough static friction to
 		// resist motor and solver impulses instead of letting a planted foot skate.
-		float friction = (parts[p] == &b.leftfoot || parts[p] == &b.rightfoot)
-			? 2.5f : 1.0f;
+		float friction = isFoot ? 2.5f : 1.0f;
 		solvecontacts(*parts[p], friction);
 	}
 
@@ -1075,8 +1171,13 @@ void floorcolision(body& b) {
 		// first floor solve.  Reapply the existing floor constraints so the final
 		// state of this iteration keeps supported feet planted.
 		for (int p = 0; p < 7; ++p) {
-			float friction = (parts[p] == &b.leftfoot || parts[p] == &b.rightfoot)
-				? 2.5f : 1.0f;
+			floorcolisionpart(*parts[p]);
+			const bool isFoot = parts[p] == &b.leftfoot || parts[p] == &b.rightfoot;
+			if (isFoot) {
+				solvefloorstaticfriction(*parts[p]);
+				floorcolisionpart(*parts[p]);
+			}
+			float friction = isFoot ? 2.5f : 1.0f;
 			solvecontacts(*parts[p], friction);
 		}
 	}
@@ -1111,7 +1212,7 @@ __global__ void updatekernel(int n, body* b, float dt) {
 
 	intigrate(b[i], dt);
 	for (int k = 0; k < itrs; k++) {
-		solvejoints(b[i]);
+		solvejoints(b[i], k == 0);
 		floorcolision(b[i]);
 	}
 
@@ -1214,10 +1315,10 @@ void updateRobot(float dt) {
 
 	static float accumulator = 0.0f;
 	accumulator += clamp(dt, 0.0f, 0.1f);
-	while (accumulator >= DT) {
+	//while (accumulator >= DT) {
 		updatekernel << <blocks(robot_count), threads >> > (robot_count, d_bodies, DT);
-		accumulator -= DT;
-	}
+	//	accumulator -= DT;
+	//}
 
 	gettx << <1, 1 >> > (robot_count, d_bodies);
 	cudaMemcpyFromSymbol(&tx, d_tx, sizeof(float), 0, cudaMemcpyDeviceToHost);
@@ -1275,6 +1376,12 @@ void freedevmem() {
 }
 void resetrobots() {
 
+	// initrobot registers fresh CUDA/GL buffers.  Unregister the old pair first
+	// so a manual reset cannot double-register the same resource.
+	unregistervbo();
 	freedevmem();
 	initrobot(robot_count);
+	// A teleport changes the MDP state.  Let the next full rollout overwrite
+	// old samples rather than mixing trajectories across that discontinuity.
+	step = 0;
 }

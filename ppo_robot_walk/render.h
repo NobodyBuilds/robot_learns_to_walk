@@ -17,4 +17,8 @@ void freedevmem();
 void registervbo(int n);
 void unregistervbo();
 __device__ void resetrobotidxkernel(body& robotdata);
+// These use the same active floor contacts and contact-point velocity as the
+// physics solver. They are consumed by the CUDA reward kernel.
+__device__ float footsupportload(part& p);
+__device__ float footcontactslip(part& p);
 

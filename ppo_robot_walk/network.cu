@@ -19,7 +19,7 @@
 #include "network.h"
 #include "norender.h"
 
-
+#define debug false
 struct device_data {
 	int n;
 	int layers;
@@ -47,7 +47,10 @@ void geterror(const std::string& label, cudaError_t err) {
 }
 
 curandState* d_rngstate;
-constexpr float ACTION_SIGMA = 0.6f;
+
+constexpr float ACTION_SIGMA = 0.25f;
+constexpr float PPO_GAMMA = 0.995f;
+constexpr float PPO_GAE_LAMBDA = 0.99f;
 
 __global__ void init_rng(curandState* state, int n, unsigned long seed) {
 	for (int i = 0; i < n; i++) {
@@ -169,6 +172,7 @@ std::vector<float> actor_weights;
 std::vector<float> critic_weights;
 std::vector<float> actor_bias;
 std::vector<float> critic_bias;
+
 void initWB(float min, float max) {
 
 
@@ -233,6 +237,7 @@ void write_file(const std::string& address, std::vector<float>& arr) {
 	file.close();
 
 }
+
 void save_weights() {
 
 
@@ -260,10 +265,7 @@ void save_weights() {
 __device__ double MSE = 0.0f;
 
 __device__ float leakyrelu(float x) {
-
-	return (x > 0.f) ? x : 0.01f * x;
-	//return tanhf(x);
-
+	return tanhf(x);
 }
 __device__ __forceinline__ void firstlayer(int n, int ci, int w, int D, int Inputs, float* input, const float* __restrict__ weights, const float* __restrict__ bias, float* nodevals) {
 
@@ -297,7 +299,8 @@ __device__ void solvelayers(int n, int ci, int nin, int w, int d, int b, int p, 
 
 }
 __device__ float dslope(float x) {
-	return x > 0.f ? 1.f : 0.01f;
+	float y = tanhf(x);
+	return 1.0f - y * y;
 }
 
 __device__ float get_lClip(replaybuffer* buffer, int s) {
@@ -380,8 +383,12 @@ __device__ float getlr(float lr, float m, float v, float eps) {
 __device__ __forceinline__ void adam_update(float& w, float2& mv, const float g,
 	const float lrate, const float b1, const float b2, const float bt1, const float bt2)
 {
-	const float m = b1 * mv.x + (1.0f - b1) * g;
-	const float v = b2 * mv.y + (1.0f - b2) * g * g;
+	// PPO advantages are normalized, but a bad value target can still produce
+	// an outlier critic gradient.  Clamp each update before Adam so one batch
+	// cannot recreate the saturated checkpoint we just rejected.
+	const float safeGradient = fminf(fmaxf(g, -10.0f), 10.0f);
+	const float m = b1 * mv.x + (1.0f - b1) * safeGradient;
+	const float v = b2 * mv.y + (1.0f - b2) * safeGradient * safeGradient;
 	mv.x = m; mv.y = v;
 	w -= lrate * (m * bt1) / (sqrtf(v * bt2) + 1e-6f);      
 }
@@ -454,6 +461,7 @@ __device__ float sigmoid(float x) {
 __device__ float actionTarget(int j, float action,body& p) {
 	float lo = 0.0f;
 	float hi = 0.0f;
+	float ms = minjointstrength / maxjointstrength;
 	switch (j) {
 	case 0: lo = degtorad* p.lefthip.minangle; hi = degtorad * p.lefthip.maxangle; break;
 	case 1: lo = degtorad* p.righthip.minangle; hi = degtorad * p.righthip.maxangle; break;
@@ -461,12 +469,12 @@ __device__ float actionTarget(int j, float action,body& p) {
 	case 3: lo = degtorad* p.rightknee.minangle; hi = degtorad * p.rightknee.maxangle; break;
 	case 4: lo = degtorad* p.leftankle.minangle; hi = degtorad * p.leftankle.maxangle; break;
 	case 5: lo = degtorad* p.rightankle.minangle; hi = degtorad * p.rightankle.maxangle; break;
-	case 6: lo = 0.0f; hi = 1.0f; break;
-	case 7: lo = 0.0f; hi = 1.0f; break;
-	case 8: lo = 0.0f; hi = 1.0f; break;
-	case 9: lo = 0.0f; hi = 1.0f; break;
-	case 10: lo = 0.0f; hi = 1.0f; break;
-	case 11: lo = 0.0f; hi = 1.0f; break;
+	case 6: lo = ms; hi = 1.0f; break;
+	case 7: lo = ms; hi = 1.0f; break;
+	case 8: lo = ms; hi = 1.0f; break;
+	case 9: lo = ms; hi = 1.0f; break;
+	case 10: lo = ms; hi = 1.0f; break;
+	case 11: lo = ms; hi = 1.0f; break;
 	
 	}
 	return (lo) + 0.5f * (action + 1.0f) * ((hi) - (lo));
@@ -496,13 +504,14 @@ __device__ float tanhGaussianLogProb(float z, float action, float mean) {
 		- 0.9189385332f
 		- logf(fmaxf(1.0f - action * action, 1e-6f));
 }
-__device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* buffer, int s, int ci, curandState* d_rngstate) {
+__device__ void getoutput(int D, float* nodevals, body* d_body, replaybuffer* buffer,
+	int s, int ci, curandState* d_rngstate, bool sampleActions) {
 	int bidx = s * d.n + ci;
 	body b = d_body[ci];
 	float oldLogprob = 0.0f;
 	for (int j = 0; j < output; j++) {
 		float mean = nodevals[antityidx(D, j, ci)];
-		float z = mean + ACTION_SIGMA * curand_normal(&d_rngstate[ci]);
+		float z = sampleActions ? mean + ACTION_SIGMA * curand_normal(&d_rngstate[ci]) : mean;
 		float action = tanhf(z);
 		buffer[bidx].action[j] = action;
 		buffer[bidx].actionZ[j] = z;
@@ -536,166 +545,175 @@ __device__ float normalize(float x, float max, float min) {
 	//[-1,1] bounded for better normalization for values in a rnage
 }
 
-__device__ float steppingreward(body& b,float stepr) {
-	if (!b.alive)
-		return 0.0f;
-	//< this function is written by ai >
-	//                              
-	// Reward committed foot placements, not contact chatter.  These are in
-	// world-space pixels, so the reward cannot be manufactured by rocking the
-	// torso beneath an otherwise stationary foot.
-	constexpr float minimumCommittedStep = 25.0f;
-	constexpr float fullRewardStep = 80.0f;
-	constexpr float fullLandingLead = 20.0f;
-	float reward = 0.0f;
-	bool leftContact = b.leftfeettouching;
-	bool rightContact = b.rightfeettouching;
-
-	// Record lift-off only while the other foot is supporting the robot.
-	if (b.leftfootprevcontact && !leftContact && rightContact) {
-		b.leftfootswinging = true;
-		b.leftfoottakeoffrelx = b.leftfoot.pos.x;
-	}
-	if (b.rightfootprevcontact && !rightContact && leftContact) {
-		b.rightfootswinging = true;
-		b.rightfoottakeoffrelx = b.rightfoot.pos.x;
-	}
-
-	// A walking step keeps the opposite foot planted throughout the swing.
-	// Do not pay a later touchdown after a flight phase or a contact glitch.
-	if (b.leftfootswinging && !rightContact)
-		b.leftfootswinging = false;
-	if (b.rightfootswinging && !leftContact)
-		b.rightfootswinging = false;
-
-	// Pay once at a supported touchdown.  A foot must travel forward and land
-	// ahead of the stance foot; the squared score makes one deliberate stride
-	// more valuable per unit distance than several short, rapid shuffles.
-	if (b.leftfootswinging && !b.leftfootprevcontact && leftContact) {
-		if (rightContact) {
-			float forwardTravel = b.leftfoot.pos.x - b.leftfoottakeoffrelx;
-			float landingLead = b.leftfoot.pos.x - b.rightfoot.pos.x;
-			float strideScore = clamp((forwardTravel - minimumCommittedStep) /
-				(fullRewardStep - minimumCommittedStep), 0.0f, 1.0f);
-			float placementScore = clamp(landingLead / fullLandingLead, 0.0f, 1.0f);
-			reward += stepr * strideScore * strideScore * placementScore;
-		}
-		b.leftfootswinging = false;
-	}
-	if (b.rightfootswinging && !b.rightfootprevcontact && rightContact) {
-		if (leftContact) {
-			float forwardTravel = b.rightfoot.pos.x - b.rightfoottakeoffrelx;
-			float landingLead = b.rightfoot.pos.x - b.leftfoot.pos.x;
-			float strideScore = clamp((forwardTravel - minimumCommittedStep) /
-				(fullRewardStep - minimumCommittedStep), 0.0f, 1.0f);
-			float placementScore = clamp(landingLead / fullLandingLead, 0.0f, 1.0f);
-			reward += stepr * strideScore * strideScore * placementScore;
-		}
-		b.rightfootswinging = false;
-	}
-
-	b.leftfootprevcontact = leftContact;
-	b.rightfootprevcontact = rightContact;
-	return reward;
+__device__ float distreward(body& b, float forward, float backward, float targetSpeed) {
+	//initially written by me but improved by ai
+	// 
+	// Reward forward velocity in consistent world units.  The previous version
+	// compared a normalized position delta to a per-step upright reward, making
+	// ordinary walking progress almost invisible to PPO.
+	const float speed = (b.torso.pos.x - b.olddist) / DT;
+	b.olddist = b.torso.pos.x;
+	const float normalizedSpeed = clamp(fabsf(speed) / fmaxf(targetSpeed, 1.0f), 0.0f, 1.0f);
+	return speed >= 0.0f
+		? forward * normalizedSpeed * DT
+		: -backward * normalizedSpeed * DT;
 }
-__device__ float degval(part& p) {
-	return expf(-0.5f * (p.angle / 15.0f) * (p.angle / 15.0f));
-}
+
 __device__ float kneeStraightness(part& thigh, part& shin) {
 	float angleDiff = (shin.angle - thigh.angle) * degtorad;
 	angleDiff = atan2f(sinf(angleDiff), cosf(angleDiff));
 	float normalizedDiff = angleDiff / (15.0f * degtorad);
 	return expf(-0.5f * normalizedDiff * normalizedDiff);
 }
+__device__ float degval(part& p) {
+	return expf(-0.5f * (p.angle / 15.0f) * (p.angle / 15.0f));
+}
+__device__ float straightreward(body& b,float yreward) {
+	//535.0f
+	float reward = 0.0f;
 
-__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body, float aliver, float deadr, float feetr, float distr, float yr, float reverse, float fr, float targetSpeed, float stepr, float slidingPenaltyWeight) {
+	float val = clamp(b.torso.pos.y / 535.0f,0.0f,1.0f);
+	float limit = 1.2f;
+	float a = kneeStraightness(b.leftthigh, b.leftshin);
+	float c = kneeStraightness(b.rightthigh, b.rightshin);
+	float kne = a + c + degval(b.torso)+ degval(b.leftfoot)+degval(b.rightfoot);
+
+	bool hassupport = b.leftfeettouching || b.rightfeettouching;
+	if (hassupport) {
+		float x =1.0f- clamp(val, 0.0f, 1.0f) ;
+		reward = (kne + val - x) * yreward ;
+	}
+	else{
+		val = b.torso.pos.y / 535.0f;
+		float limit = 1.2f;//give headroom for small jumps
+		reward = val > limit ? -0.25f * (val - limit) * yreward : 0.0f;
+	}
+
+	return reward;
+
+
+
+}
+
+__device__ float footclearance(part& foot) {
+	float radians = foot.angle * degtorad;
+	float halfHeight = 0.5f * (fabsf(sinf(radians)) * foot.size.x + fabsf(cosf(radians)) * foot.size.y);
+	return fmaxf(0.0f, foot.pos.y - halfHeight - FLOOR_SURFACE_Y);
+}
+
+__device__ float walkreward(body& b, float strideWeight, float alternatingWeight, float clearanceWeight) {
+	//written by ai
+	const bool leftTouching = b.leftfeettouching;
+	const bool rightTouching = b.rightfeettouching;
+	const bool leftLanded = leftTouching && !b.leftfootprevcontact;
+	const bool rightLanded = rightTouching && !b.rightfootprevcontact;
+	float reward = 0.0f;
+
+	// Start a swing when a planted foot leaves the floor and remember its
+	// position relative to the torso so forward foot placement can be rewarded.
+	if (b.leftfootprevcontact && !leftTouching) {
+		b.leftfoottakeoffrelx = b.leftfoot.pos.x - b.torso.pos.x;
+		b.leftfootswinging = true;
+	}
+	if (b.rightfootprevcontact && !rightTouching) {
+		b.rightfoottakeoffrelx = b.rightfoot.pos.x - b.torso.pos.x;
+		b.rightfootswinging = true;
+	}
+
+	// Reward a lifted foot only while the other foot is supporting the robot;
+	// this avoids rewarding flight or a static two-foot stance.
+	if (leftTouching && !rightTouching && b.rightfootswinging) {
+		reward += clearanceWeight * clamp(footclearance(b.rightfoot) / 20.0f, 0.0f, 1.0f) * DT;
+	}
+	if (rightTouching && !leftTouching && b.leftfootswinging) {
+		reward += clearanceWeight * clamp(footclearance(b.leftfoot) / 20.0f, 0.0f, 1.0f) * DT;
+	}
+
+	// Simultaneous touchdown is not an alternating step. Reset the sequence so
+	// a later single-foot landing must establish a fresh left/right order.
+	if (leftLanded && rightLanded) {
+		b.leftfootswinging = false;
+		b.rightfootswinging = false;
+		b.lastStepFoot = 0;
+	}
+	else if (leftLanded) {
+		if (b.leftfootswinging) {
+			if (b.lastStepFoot == 2) {
+				float stride = (b.leftfoot.pos.x - b.torso.pos.x) - b.leftfoottakeoffrelx;
+				reward += alternatingWeight + strideWeight * clamp(stride / 40.0f, -1.0f, 1.0f);
+			}
+			else if (b.lastStepFoot == 1) {
+				reward -= alternatingWeight;
+			}
+		}
+		b.lastStepFoot = 1;
+		b.leftfootswinging = false;
+	}
+	else if (rightLanded) {
+		if (b.rightfootswinging) {
+			if (b.lastStepFoot == 1) {
+				float stride = (b.rightfoot.pos.x - b.torso.pos.x) - b.rightfoottakeoffrelx;
+				reward += alternatingWeight + strideWeight * clamp(stride / 40.0f, -1.0f, 1.0f);
+			}
+			else if (b.lastStepFoot == 2) {
+				reward -= alternatingWeight;
+			}
+		}
+		b.lastStepFoot = 2;
+		b.rightfootswinging = false;
+	}
+
+	return reward;
+}
+
+__device__ float slidingpenalty(body& b, float weight) {
+	float slip = 0.0f;
+	// Penalize planted-foot motion only. Position drift belongs in the forward
+	// progress signal; mixing it here used mismatched units and overwhelmed it.
+	if (b.leftfeettouching)
+		slip += clamp(fabsf(b.leftfoot.vel.x) / 100.0f, 0.0f, 1.0f);
+	if (b.rightfeettouching)
+		slip += clamp(fabsf(b.rightfoot.vel.x) / 100.0f, 0.0f, 1.0f);
+
+	if (b.leftfeettouching) b.leftfootprevcontact = true; else b.leftfootprevcontact = false;
+	if (b.rightfeettouching) b.rightfootprevcontact = true; else b.rightfootprevcontact = false;
+	return -weight * slip * DT;
+}
+
+__global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body,float aliver, float deadr, float yr, float reverse,
+	float fr, float targetSpeed, float stepr, float slidingPenalty, float alternatingStep, float swingClearance) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n)return;
 	int bidx = s * d.n + i;
 
 	body& b = d_body[i];
 
-	
+
 	float dead = d_body[i].alive ? aliver : -deadr;
 
-	float feet = (d_body[i].leftfeettouching || d_body[i].rightfeettouching) ? feetr : 0.0f;
-
-	float olddist = d_body[i].olddist;
-	float dist = d_body[i].torso.pos.x - startx;
-	float dx = dist - olddist;
-	float speed = dx / fmaxf(DT, 1e-4f);
-
-	if (d_body[i].torso.pos.x > maxdist || d_body[i].torso.pos.x < -maxdist) {
-		printf("WARNING: increase maxdist define or it will cause errors");
-		//future warning
+	const bool hasFootSupport = b.leftfeettouching || b.rightfeettouching;
+	float distance_reward = 0.0f;
+	if (b.alive) {
+		const float progressReward = distreward(b, fr, reverse, targetSpeed);
+		if (hasFootSupport) distance_reward = progressReward;
 	}
+	float straightness = straightreward(b, yr) * DT;
+	float gait = b.alive ? walkreward(b, stepr, alternatingStep, swingClearance) : 0.0f;
+	float slidepenalty = b.alive ? slidingpenalty(b, slidingPenalty) : 0.0f;
 
-
-	float val = clamp(d_body[i].torso.pos.y / 535.0f, 0.0f, 1.0f);
-	
-	float kneePosture = kneeStraightness(b.leftthigh, b.leftshin)
-		+ kneeStraightness(b.rightthigh, b.rightshin);
-	float upright = degval(b.torso) + kneePosture;
-	bool hasSupport = d_body[i].leftfeettouching || d_body[i].rightfeettouching;
-	float progress = clamp(speed / fmaxf(targetSpeed, 1.0f), -1.0f, 1.0f);
-	progress *= progress < 0.0f ? reverse : fr;
-	float movementReward = d_body[i].alive && hasSupport
-		? distr * progress * upright
-		: 0.0f;
-	// Penalize only the horizontal motion of a foot that is meant to be planted.
-	// Torso speed is not a slip signal: a correct gait moves the torso forward
-	// while its stance foot is nearly stationary in world space.
-	float plantedFootSlip = 0.0f;
-	int plantedFeet = 0;
-	if (d_body[i].leftfeettouching && !d_body[i].leftfootswinging) {
-		plantedFootSlip += fabsf(d_body[i].leftfoot.vel.x);
-		plantedFeet++;
-	}
-	if (d_body[i].rightfeettouching && !d_body[i].rightfootswinging) {
-		plantedFootSlip += fabsf(d_body[i].rightfoot.vel.x);
-		plantedFeet++;
-	}
-	// Ignore sub-pixel contact-solver jitter, then scale genuine skating by the
-	// commanded walking speed.  Averaging prevents double support from paying
-	// twice for the same amount of slip.
-	float averageFootSlip = plantedFeet > 0 ? plantedFootSlip / plantedFeet : 0.0f;
-	float normalizedSlip = clamp((averageFootSlip - 3.0f) /
-		fmaxf(targetSpeed, 1.0f), 0.0f, 1.0f);
-	float slidingPenalty = d_body[i].alive
-		? slidingPenaltyWeight * normalizedSlip
-		: 0.0f;
-
-	float straight;
-	if (hasSupport) {
-		// Keep a small balance signal, but don't let standing dominate sparse steps.
-		straight = 0.1f * (upright + val * yr);
-	}
-	else {
-		val = d_body[i].torso.pos.y / 535.0f;
-		float limit = 1.2f;//give headroom for small jumps
-		straight = val > limit ? -0.25f * (val - limit) * yr : 0.0f;
-	}
-		
-	float stepreward = steppingreward(d_body[i], stepr);
-		
-
-
-	
-	float sum = dead + feet + straight + movementReward + stepreward - slidingPenalty;
-	float reward =sum;
-
-	d_body[i].olddist = d_body[i].torso.pos.x - 500.0f;
-
+	float reward = dead + distance_reward + straightness + gait + slidepenalty;
 
 	buffer[bidx].reward = reward;
 
-	
+
+
 	if (!d_body[i].alive) {
 		resetrobotidxkernel(d_body[i]);
 	}
-	
+
 
 }
+
 __device__ void getQvalue(int s, int c, int D, float* nodevals, replaybuffer* buffer) {
 	int bidx = s * d.n + c;
 	buffer[bidx].value = nodevals[antityidx(D, 0, c)];
@@ -710,7 +728,7 @@ __device__ void getQvalue(int s, int c, int D, float* nodevals, replaybuffer* bu
 __global__ void computevalskernel(int n, int ticks, replaybuffer* buffer) {
 	int c = blockIdx.x * blockDim.x + threadIdx.x;
 	if (c >= n) return;
-	float y = 0.99f;
+	float y = PPO_GAMMA;
 	float gae = 0;
 	for (int t = ticks - 1; t >= 0; t--) {
 		int i = t * n + c;
@@ -733,7 +751,7 @@ __global__ void computevalskernel(int n, int ticks, replaybuffer* buffer) {
 
 		gae =
 			delta
-			+ y * 0.95 * mask * gae;
+			+ y * PPO_GAE_LAMBDA * mask * gae;
 
 
 		buffer[i].advantage = gae;
@@ -798,7 +816,8 @@ __device__ void fill_jointinput(int i, float* input, joint& j) {
 
 
 __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights,
-	const float* __restrict__ bias, float* nodevals, const Layer* layer, bool isactor, replaybuffer* buffer, int s, curandState* rng
+	const float* __restrict__ bias, float* nodevals, const Layer* layer, bool isactor,
+	replaybuffer* buffer, int s, curandState* rng, bool sampleActions
 
 ) {
 
@@ -890,7 +909,7 @@ __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights
 	}
 	float outd = layer[d.layers - 1].dIdx;
 	if (isactor) {
-		getoutput(outd, nodevals, d_body, buffer, s, i, rng);
+		getoutput(outd, nodevals, d_body, buffer, s, i, rng, sampleActions);
 	}
 	else {
 		getQvalue(s, i, outd, nodevals, buffer);
@@ -1068,7 +1087,9 @@ void runfrozennet(int s, int curbatch, bool isactor) {
 
 }
 void reward(int s) {
-	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, alive, dead, feettouching, distr, yup, reversepenalty, forwardr, targetForwardSpeed, steppingRewardWeight, slidingPenaltyWeight);
+	reward_kernel << <blocks(robot_count), threads >> > (robot_count, s, d_state, d_bodies, aliver, dead, yup, reversepenalty,
+		forwardr, targetForwardSpeed, steppingRewardWeight, slidingPenaltyWeight,
+		alternatingStepRewardWeight, swingClearanceRewardWeight);
 
 
 
@@ -1155,10 +1176,16 @@ void frozennet(bool isactor) {
 void net(int s, bool isactor) {
 
 	if (isactor) {
-		netkernel << <blocks(robot_count), threads >> > (robot_count, d_bodies, d_actor_weights, d_actor_bias, d_antity_nodevals, d_actlayer, isactor, d_state, s, d_rngstate);
+		// Evaluation should show the learned mean action, not fresh exploration
+		// noise at every 120 Hz tick.
+		netkernel << <blocks(robot_count), threads >> > (robot_count, d_bodies,
+			d_actor_weights, d_actor_bias, d_antity_nodevals, d_actlayer, isactor,
+			d_state, s, d_rngstate, training);
 	}
 	else {
-		netkernel << <blocks(robot_count), threads >> > (robot_count, d_bodies, d_critic_weights, d_critic_bias, d_antity_nodevals, d_critlayer, isactor, d_state, s, d_rngstate);
+		netkernel << <blocks(robot_count), threads >> > (robot_count, d_bodies,
+			d_critic_weights, d_critic_bias, d_antity_nodevals, d_critlayer, isactor,
+			d_state, s, d_rngstate, false);
 
 	}
 
@@ -1366,6 +1393,10 @@ void cudafree() {
 	cudaFree(d_antity_nodevals);
 	cudaFree(d_actlayer);
 	cudaFree(d_critlayer);
+	cudaFree(actor_adam_weights);
+	cudaFree(actor_adam_bias);
+	cudaFree(critic_adam_weights);
+	cudaFree(critic_adam_bias);
 
 
 }

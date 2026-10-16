@@ -13,6 +13,7 @@
 #define degtorad PI/180.0f
 #define radtodeg 180.0f/PI
 #define maxjointstrength 5.0f
+#define minjointstrength 1.0f
 #define inputs 94
 #define output 12
 #define maxvel 1000.0f
@@ -24,7 +25,6 @@
 #define FLOOR_CENTER_Y 50.0f
 #define FLOOR_SIZE 200.0f
 #define FLOOR_SURFACE_Y (FLOOR_CENTER_Y + FLOOR_SIZE * 0.5f)
-
 
 
 
@@ -48,6 +48,9 @@ struct part {
     bool isstatic = false;
     float angvel, mass, inertia, invmass, invinertia, torque;
     float floorNormalImpulse[4], floorTangentImpulse[4];
+  
+    float floorAnchorX[4];
+    bool floorAnchorActive[4];
     float angle;
     float2 pos;
     float2 size;
@@ -73,12 +76,15 @@ struct body {
     bool rightthightouching;
     bool alive;
     float olddist;
+    float feetdist;
     bool leftfootprevcontact;
     bool rightfootprevcontact;
     bool leftfootswinging;
     bool rightfootswinging;
     float leftfoottakeoffrelx;
     float rightfoottakeoffrelx;
+    // 0 = no touchdown recorded, 1 = left, 2 = right.
+    int lastStepFoot;
     joint leftknee, rightknee;
     joint leftankle, rightankle;
     joint lefthip, righthip;
@@ -96,7 +102,6 @@ inline int sample_robot_count = 1;
 inline bool dummyQuad = false;
 inline bool dummyCircle = false;
 inline bool addjitter = false;
-// Horizontal acceleration (pixels/s^2) and interval (seconds) for balance perturbations.
 inline float magnitude = 50000.0f;
 inline float threshold = 1.0f;
 inline bool autoreset = false;
@@ -118,7 +123,9 @@ inline __device__ __host__ float clamp(float val, float min, float max) {
 inline float mloss = 0.0f;
 inline float oldmloss = 0.0f;
 inline float rollout_time = 0.0f;
-inline float lr = 0.001f;
+// PPO updates are applied several times to each rollout.  A conservative
+// default prevents a single noisy batch from saturating the unbounded logits.
+inline float lr = 0.0003f;
 inline float gentime = 60.0f;
 inline float timer = 0.0f;
 inline float fpsTimer = 0.0f;
@@ -197,17 +204,21 @@ inline int blocks(int n) {
 	return (n + threads - 1) / threads;
 };
 //rewards  
-inline float alive = 0.05f;
+inline float aliver = 0.05f;
 inline float dead = 5.0f;
-inline float feettouching = 0.0f;
-inline float distr = 0.3f;
 inline float yup = 0.25f;
 inline float reversepenalty = 1.5f;
 inline float forwardr = 1.0f;
+// Target torso speed (pixels/second) used to normalize the dense progress reward.
 inline float targetForwardSpeed = 100.0f;
 inline float steppingRewardWeight = 3.0f;
 inline float slidingPenaltyWeight = 0.5f;
+inline float alternatingStepRewardWeight = 2.0f;
+inline float swingClearanceRewardWeight = 1.5f;
+
 inline bool legalive = false;
+
+inline bool fasttrain = false;
 
 inline std::vector<quadvertex2d> renderdata;
 

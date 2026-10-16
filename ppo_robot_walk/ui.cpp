@@ -15,6 +15,7 @@
 
 
 
+
 void renderUI() {
 	static std::vector<float> learningCurve;
 	static float lastLoss = 0.0f;
@@ -45,7 +46,7 @@ void renderUI() {
 	if (ImGui::Button("restart")) {
 		restart();
 	}
-
+	ImGui::Checkbox("no accumulator ", &fasttrain);
 
 	ImGui::Spacing();
 
@@ -73,18 +74,21 @@ void renderUI() {
 			resetrobots();
 		}
 	}
+	ImGui::DragFloat("generation time", &gentime,0.1f);
 	ImGui::Spacing();
 	ImGui::Text("rewards");
-	ImGui::DragFloat("alive reward", &alive, 0.01f, 0.0f, 100.0f);
+	ImGui::DragFloat("alive reward", &aliver, 0.01f, 0.0f, 100.0f);
 	ImGui::DragFloat("dead penalty", &dead, 0.01f, 0.0f, 100.0f);
-	ImGui::DragFloat("feet reward", &feettouching, 0.01f, 0.0f, 100.0f);
 	ImGui::DragFloat("straight reward", &yup, 0.01f, 0.0f, 100.0f);
-	ImGui::DragFloat("dist reward", &distr, 0.01f, 0.0f, 100.0f);
-	ImGui::DragFloat("forward reward", &forwardr, 0.01f, 0.0f, 1.0f);
-	ImGui::DragFloat("reverse penalty", &reversepenalty, 0.01f, 0.0f, 5.0f);
-	ImGui::DragFloat("target forward speed", &targetForwardSpeed, 1.0f, 10.0f, 1000.0f);
-	ImGui::DragFloat("step reward", &steppingRewardWeight, 0.01f, 0.0f, 10.0f);
-	ImGui::DragFloat("sliding penalty", &slidingPenaltyWeight, 0.01f, 0.0f, 5.0f);
+	ImGui::DragFloat("forward reward", &forwardr, 1.0f, 0.0f, 500.0f);
+	ImGui::DragFloat("target forward speed", &targetForwardSpeed, 1.0f, 10.0f, 500.0f);
+	ImGui::DragFloat("reverse penalty", &reversepenalty, 1.0f, 0.0f, 500.0f);
+	ImGui::DragFloat("forward stride reward", &steppingRewardWeight, 0.01f, 0.0f, 10.0f);
+	ImGui::DragFloat("alternating touchdown reward", &alternatingStepRewardWeight, 0.01f, 0.0f, 20.0f);
+	ImGui::DragFloat("swing clearance reward / sec", &swingClearanceRewardWeight, 0.01f, 0.0f, 20.0f);
+	ImGui::DragFloat("sliding penalty", &slidingPenaltyWeight, 0.01f, 0.0f, 20.0f);
+
+
 
 	//ImGui::Separator();
 	ImGui::Spacing();
@@ -113,16 +117,16 @@ namespace {
 			{ "training",             SettingEntry::Bool,  &training },
 			{ "rollout_epoch",        SettingEntry::Int,   &rollout_epoch },
 			{ "legalive",             SettingEntry::Bool,  &legalive },
-			{ "alive",                SettingEntry::Float, &alive },
+			{ "alive",                SettingEntry::Float, &aliver },
 			{ "dead",                 SettingEntry::Float, &dead },
-			{ "feettouching",         SettingEntry::Float, &feettouching },
 			{ "yup",                  SettingEntry::Float, &yup },
-			{ "distr",                SettingEntry::Float, &distr },
 			{ "forwardr",             SettingEntry::Float, &forwardr },
-			{ "reversepenalty",       SettingEntry::Float, &reversepenalty },
 			{ "targetForwardSpeed",   SettingEntry::Float, &targetForwardSpeed },
+			{ "reversepenalty",       SettingEntry::Float, &reversepenalty },
 			{ "steppingRewardWeight", SettingEntry::Float, &steppingRewardWeight },
 			{ "slidingPenaltyWeight", SettingEntry::Float, &slidingPenaltyWeight },
+			{ "alternatingStepRewardWeight", SettingEntry::Float, &alternatingStepRewardWeight },
+			{ "swingClearanceRewardWeight", SettingEntry::Float, &swingClearanceRewardWeight },
 			{ "addjitter",            SettingEntry::Bool,  &addjitter },
 			{ "magnitude",            SettingEntry::Float, &magnitude },
 			{ "threshold",            SettingEntry::Float, &threshold },
