@@ -49,7 +49,7 @@ void geterror(const std::string& label, cudaError_t err) {
 
 curandState* d_rngstate;
 
-constexpr float ACTION_SIGMA = 0.25f;
+constexpr float ACTION_SIGMA = 0.75f;
 constexpr float PPO_GAMMA = 0.995f;
 constexpr float PPO_GAE_LAMBDA = 0.99f;
 
@@ -671,7 +671,7 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body,f
 
 
 	float dead = d_body[i].alive ? aliver : -deadr;
-
+	float win = b.torso.pos.x >= maxdist ? 100 : 0.0f;
 	const bool hasFootSupport = b.leftfeettouching || b.rightfeettouching;
 	float distance_reward = 0.0f;
 	// Keep olddist at the last supported position through a jump. Progress in
@@ -682,7 +682,7 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body,f
 	//float gait = b.alive ? walkreward(b, stepr, alternatingStep, swingClearance) : 0.0f;
 	//float slidepenalty = b.alive ? slidingpenalty(b, slidingPenalty) : 0.0f;
 
-	float reward = dead + distance_reward +straightreward(b,yr);
+	float reward = dead + distance_reward +straightreward(b,yr)+ win;
 #ifndef debug
 	if (i == 0)printf("distreward %f  \n", distance_reward);
 	if (i == 0)printf("straight : %f  \n", straightreward(b, yr));
@@ -692,7 +692,7 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body,f
 
 
 
-	if (!d_body[i].alive) {
+	if (!d_body[i].alive|| b.torso.pos.x >maxdist) {
 		resetrobotidxkernel(d_body[i]);
 	}
 
@@ -939,10 +939,7 @@ __global__ void getdone(int n, body* b, replaybuffer* buffer, int s,bool ld) {
 	}
 
 
-	if (b[i].torso.pos.x > maxdist) {
-		printf(" max dist reached \n");
-		resetrobotidxkernel(b[i]);
-	}
+	
 
 }
 //learner net
