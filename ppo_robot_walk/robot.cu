@@ -128,7 +128,9 @@ void setrobotdata(int n) {
 		initjoint(&robotdata[i].leftshin, &robotdata[i].leftfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, {-35,35}, robotdata[i].leftankle);
 		initjoint(&robotdata[i].rightshin, &robotdata[i].rightfoot, { 0.0f,-75.0f }, { 0.0f,0.0f }, {-35,35}, robotdata[i].rightankle);
 		setforwardpose(robotdata[i]);
-		robotdata[i].olddist = startx;
+		robotdata[i].olddist = robotdata[i].torso.pos.x;
+		robotdata[i].progressAnchorX = robotdata[i].torso.pos.x;
+		robotdata[i].stalledSteps = 0;
 		float feetDx = robotdata[i].leftfoot.pos.x - robotdata[i].rightfoot.pos.x;
 		float feetDy = robotdata[i].leftfoot.pos.y - robotdata[i].rightfoot.pos.y;
 		robotdata[i].feetdist = sqrtf(feetDx * feetDx + feetDy * feetDy) / 560.0f;
@@ -166,7 +168,9 @@ __global__ void d_setrobotdata(int n, body* robotdata) {
 	robotdata[i].torsotouchingground = false;
 	robotdata[i].leftfeettouching = false;
 	robotdata[i].rightfeettouching = false;
-	robotdata[i].olddist = startx;
+	robotdata[i].olddist = robotdata[i].torso.pos.x;
+	robotdata[i].progressAnchorX = robotdata[i].torso.pos.x;
+	robotdata[i].stalledSteps = 0;
 	robotdata[i].leftshintouching = false;
 	robotdata[i].rightshintouching = false;
 	robotdata[i].leftthightouching = false;
@@ -201,7 +205,9 @@ __device__ void resetrobotidxkernel( body& robotdata) {
 	b.leftfeettouching = false;
 	b.rightfeettouching = false;
 	b.torsotouchingground = false;
-	b.olddist = startx;
+	b.olddist = b.torso.pos.x;
+	b.progressAnchorX = b.torso.pos.x;
+	b.stalledSteps = 0;
 	b.leftshintouching = false;
 	b.rightshintouching = false;
 	b.leftthightouching = false;

@@ -12,15 +12,13 @@
 #define startx 500.0f
 #define degtorad PI/180.0f
 #define radtodeg 180.0f/PI
-#define maxjointstrength 5.0f
+#define maxjointstrength 10.0f
 #define minjointstrength 1.0f
-#define inputs 94
+#define inputs 68
 #define output 12
 #define maxvel 1000.0f
 #define maxangvel 1000.0f 
 #define maxtorque 100.0f
-#define maxmass 100.0f
-#define maxinertia 400000.0f
 #define maxdist 10000.0f
 #define FLOOR_CENTER_Y 50.0f
 #define FLOOR_SIZE 200.0f
@@ -76,6 +74,8 @@ struct body {
     bool rightthightouching;
     bool alive;
     float olddist;
+    float progressAnchorX;
+    int stalledSteps;
     float feetdist;
     bool leftfootprevcontact;
     bool rightfootprevcontact;
@@ -123,8 +123,7 @@ inline __device__ __host__ float clamp(float val, float min, float max) {
 inline float mloss = 0.0f;
 inline float oldmloss = 0.0f;
 inline float rollout_time = 0.0f;
-// PPO updates are applied several times to each rollout.  A conservative
-// default prevents a single noisy batch from saturating the unbounded logits.
+
 inline float lr = 0.0003f;
 inline float gentime = 60.0f;
 inline float timer = 0.0f;
@@ -133,8 +132,6 @@ inline float fpsCount = 0;
 inline float fps = 0;
 inline float avgFps = 0;
 inline float h_dt = 1.0f / 120.0f;
-//inline const int inputs = 71;
-//inline const int output = 6;
 inline int actor_layers;
 inline int critic_layers;
 inline int rollout_epoch = 2;

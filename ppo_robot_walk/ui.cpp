@@ -33,10 +33,10 @@ void renderUI() {
 	ImGui::Begin("debug");
 	ImGui::Text("fps: %3f  time: %3f", avgFps, timer);
 	ImGui::Text("Gen: %d  rollout gen %d  buffer %d / %d  time:%f", gen, rolloutstep, step * robot_count, replaybuffersize, rollout_time);
-	ImGui::Text("mse: %5f prev %5f ", mloss, oldmloss);
+	ImGui::Text("GAE squared: %5f prev %5f ", mloss, oldmloss);
 	ImGui::Text("dist: %f", tx - 500.0f);
 	ImGui::Spacing();
-	ImGui::Text("Learning curve");
+	ImGui::Text("GAE squared history");
 	if (!learningCurve.empty()) {
 		ImGui::PlotLines("##learning_curve", learningCurve.data(), (int)learningCurve.size(), 0, nullptr, 0.0f, FLT_MAX, ImVec2(0.0f, 140.0f));
 	}
@@ -46,6 +46,9 @@ void renderUI() {
 	if (ImGui::Button("restart")) {
 		restart();
 	}
+	/*if (ImGui::Button("new policy (back up checkpoint)")) {
+		restart(true);
+	}*/
 	ImGui::Checkbox("no accumulator ", &fasttrain);
 
 	ImGui::Spacing();
@@ -83,10 +86,10 @@ void renderUI() {
 	ImGui::DragFloat("forward reward", &forwardr, 1.0f, 0.0f, 500.0f);
 	ImGui::DragFloat("target forward speed", &targetForwardSpeed, 1.0f, 10.0f, 500.0f);
 	ImGui::DragFloat("reverse penalty", &reversepenalty, 1.0f, 0.0f, 500.0f);
-	ImGui::DragFloat("forward stride reward", &steppingRewardWeight, 0.01f, 0.0f, 10.0f);
+	/*ImGui::DragFloat("forward stride reward", &steppingRewardWeight, 0.01f, 0.0f, 10.0f);
 	ImGui::DragFloat("alternating touchdown reward", &alternatingStepRewardWeight, 0.01f, 0.0f, 20.0f);
 	ImGui::DragFloat("swing clearance reward / sec", &swingClearanceRewardWeight, 0.01f, 0.0f, 20.0f);
-	ImGui::DragFloat("sliding penalty", &slidingPenaltyWeight, 0.01f, 0.0f, 20.0f);
+	ImGui::DragFloat("sliding penalty", &slidingPenaltyWeight, 0.01f, 0.0f, 20.0f);*/
 
 
 

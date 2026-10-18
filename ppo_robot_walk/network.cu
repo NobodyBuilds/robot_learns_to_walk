@@ -14,12 +14,13 @@
 #include <chrono>
 #include <thread>
 #include <unordered_set>
+#include <filesystem>
 #include "vars.h"
 #include "render.h"
 #include "network.h"
 #include "norender.h"
 
-#define debug false
+#define debug true
 struct device_data {
 	int n;
 	int layers;
@@ -120,8 +121,8 @@ void initlayers() {
 	//actor network
 	addlayer(inputs, 128, true);
 	addlayer(128, 64, true);
+	addlayer(64, 64, true);
 	addlayer(64, 32, true);
-	addlayer(32, 32, true);
 	addlayer(32, output, true);
 
 
@@ -129,8 +130,8 @@ void initlayers() {
 	//critic network
 	addlayer(inputs, 128, false);
 	addlayer(128, 64, false);
+	addlayer(64, 64, false);
 	addlayer(64, 32, false);
-	addlayer(32, 32, false);
 	addlayer(32, 1, false);
 
 
@@ -173,7 +174,7 @@ std::vector<float> critic_weights;
 std::vector<float> actor_bias;
 std::vector<float> critic_bias;
 
-void initWB(float min, float max) {
+void initWB(float min =0.05f, float max=0.5f) {
 
 
 
@@ -207,15 +208,86 @@ void initWB(float min, float max) {
 
 		critic_weights.resize(critic_weightbuffersize);
 		critic_bias.resize(critic_biassize);
-		float bound = sqrtf(60.0f / (32 + 64));
 		std::mt19937 rng(42);
-		std::uniform_real_distribution<float> dist(-bound, bound);
-		//actor network weights and bias
-		for (int i = 0; i < actor_weightbuffersize; i++) actor_weights[i] = dist(rng);
-		for (int i = 0; i < actor_biassize; i++) actor_bias[i] = dist(rng);
-		//critic network weights and bias
-		for (int i = 0; i < critic_weightbuffersize; i++) critic_weights[i] = dist(rng);
-		for (int i = 0; i < critic_biassize; i++) critic_bias[i] = dist(rng);
+		std::normal_distribution<double> normal(0.0, 1.0);
+
+		auto initializeNetwork = [&](
+			std::vector<float>& weights,
+			std::vector<float>& biases,
+			const std::vector<Layer>& layers,
+			bool actor)
+			{
+				std::fill(biases.begin(), biases.end(), 0.0f);
+
+				for (size_t l = 0; l < layers.size(); ++l) {
+					const Layer& layer = layers[l];
+
+					const int nin = layer.Nin;
+					const int nout = layer.Nout;
+
+					const int rows = std::max(nin, nout);
+					const int cols = std::min(nin, nout);
+
+					std::vector<double> q(rows * cols);
+
+					for (double& value : q)
+						value = normal(rng);
+
+					for (int c = 0; c < cols; ++c) {
+						for (int previous = 0; previous < c; ++previous) {
+							double projection = 0.0;
+
+							for (int r = 0; r < rows; ++r)
+								projection +=
+								q[r * cols + c] *
+								q[r * cols + previous];
+
+							for (int r = 0; r < rows; ++r)
+								q[r * cols + c] -=
+								projection * q[r * cols + previous];
+						}
+
+						double normSquared = 0.0;
+
+						for (int r = 0; r < rows; ++r)
+							normSquared +=
+							q[r * cols + c] * q[r * cols + c];
+
+						const double inverseNorm =
+							1.0 / std::sqrt(std::max(normSquared, 1e-24));
+
+						for (int r = 0; r < rows; ++r)
+							q[r * cols + c] *= inverseNorm;
+					}
+
+					const bool finalLayer = l + 1 == layers.size();
+
+					const float gain = finalLayer
+						? (actor ? 0.01f : 1.0f)
+						: std::sqrt(2.0f);
+
+					for (int i = 0; i < nout; ++i) {
+						for (int k = 0; k < nin; ++k) {
+							const double value = nout >= nin
+								? q[i * cols + k]
+								: q[k * cols + i];
+
+							// Preserve your existing mixed storage layout.
+							const int index = l == 0
+								? layer.wIdx + k * nout + i
+								: layer.wIdx + i * nin + k;
+
+							weights[index] = gain * static_cast<float>(value);
+						}
+					}
+				}
+			};
+
+		initializeNetwork(
+			actor_weights, actor_bias, actor_layerdata, true);
+
+		initializeNetwork(
+			critic_weights, critic_bias, critic_layerdata, false);
 
 	}
 	else {
@@ -544,19 +616,12 @@ __device__ float normalize(float x, float max, float min) {
 	return ((x - min) / (max - min)) * 2.0f - 1.0f;
 	//[-1,1] bounded for better normalization for values in a rnage
 }
-
-__device__ float distreward(body& b, float forward, float backward, float targetSpeed) {
-	//initially written by me but improved by ai
-	// 
-	// Reward forward velocity in consistent world units.  The previous version
-	// compared a normalized position delta to a per-step upright reward, making
-	// ordinary walking progress almost invisible to PPO.
-	const float speed = (b.torso.pos.x - b.olddist) / DT;
+__device__ float distreward(body& b, float forward, float backward) {
+	
+	const float deltaX = b.torso.pos.x - b.olddist;
 	b.olddist = b.torso.pos.x;
-	const float normalizedSpeed = clamp(fabsf(speed) / fmaxf(targetSpeed, 1.0f), 0.0f, 1.0f);
-	return speed >= 0.0f
-		? forward * normalizedSpeed * DT
-		: -backward * normalizedSpeed * DT;
+	return deltaX * (deltaX >= 0.0f ? forward : backward);
+		
 }
 
 __device__ float kneeStraightness(part& thigh, part& shin) {
@@ -595,90 +660,6 @@ __device__ float straightreward(body& b,float yreward) {
 
 }
 
-__device__ float footclearance(part& foot) {
-	float radians = foot.angle * degtorad;
-	float halfHeight = 0.5f * (fabsf(sinf(radians)) * foot.size.x + fabsf(cosf(radians)) * foot.size.y);
-	return fmaxf(0.0f, foot.pos.y - halfHeight - FLOOR_SURFACE_Y);
-}
-
-__device__ float walkreward(body& b, float strideWeight, float alternatingWeight, float clearanceWeight) {
-	//written by ai
-	const bool leftTouching = b.leftfeettouching;
-	const bool rightTouching = b.rightfeettouching;
-	const bool leftLanded = leftTouching && !b.leftfootprevcontact;
-	const bool rightLanded = rightTouching && !b.rightfootprevcontact;
-	float reward = 0.0f;
-
-	// Start a swing when a planted foot leaves the floor and remember its
-	// position relative to the torso so forward foot placement can be rewarded.
-	if (b.leftfootprevcontact && !leftTouching) {
-		b.leftfoottakeoffrelx = b.leftfoot.pos.x - b.torso.pos.x;
-		b.leftfootswinging = true;
-	}
-	if (b.rightfootprevcontact && !rightTouching) {
-		b.rightfoottakeoffrelx = b.rightfoot.pos.x - b.torso.pos.x;
-		b.rightfootswinging = true;
-	}
-
-	// Reward a lifted foot only while the other foot is supporting the robot;
-	// this avoids rewarding flight or a static two-foot stance.
-	if (leftTouching && !rightTouching && b.rightfootswinging) {
-		reward += clearanceWeight * clamp(footclearance(b.rightfoot) / 20.0f, 0.0f, 1.0f) * DT;
-	}
-	if (rightTouching && !leftTouching && b.leftfootswinging) {
-		reward += clearanceWeight * clamp(footclearance(b.leftfoot) / 20.0f, 0.0f, 1.0f) * DT;
-	}
-
-	// Simultaneous touchdown is not an alternating step. Reset the sequence so
-	// a later single-foot landing must establish a fresh left/right order.
-	if (leftLanded && rightLanded) {
-		b.leftfootswinging = false;
-		b.rightfootswinging = false;
-		b.lastStepFoot = 0;
-	}
-	else if (leftLanded) {
-		if (b.leftfootswinging) {
-			if (b.lastStepFoot == 2) {
-				float stride = (b.leftfoot.pos.x - b.torso.pos.x) - b.leftfoottakeoffrelx;
-				reward += alternatingWeight + strideWeight * clamp(stride / 40.0f, -1.0f, 1.0f);
-			}
-			else if (b.lastStepFoot == 1) {
-				reward -= alternatingWeight;
-			}
-		}
-		b.lastStepFoot = 1;
-		b.leftfootswinging = false;
-	}
-	else if (rightLanded) {
-		if (b.rightfootswinging) {
-			if (b.lastStepFoot == 1) {
-				float stride = (b.rightfoot.pos.x - b.torso.pos.x) - b.rightfoottakeoffrelx;
-				reward += alternatingWeight + strideWeight * clamp(stride / 40.0f, -1.0f, 1.0f);
-			}
-			else if (b.lastStepFoot == 2) {
-				reward -= alternatingWeight;
-			}
-		}
-		b.lastStepFoot = 2;
-		b.rightfootswinging = false;
-	}
-
-	return reward;
-}
-
-__device__ float slidingpenalty(body& b, float weight) {
-	float slip = 0.0f;
-	// Penalize planted-foot motion only. Position drift belongs in the forward
-	// progress signal; mixing it here used mismatched units and overwhelmed it.
-	if (b.leftfeettouching)
-		slip += clamp(fabsf(b.leftfoot.vel.x) / 100.0f, 0.0f, 1.0f);
-	if (b.rightfeettouching)
-		slip += clamp(fabsf(b.rightfoot.vel.x) / 100.0f, 0.0f, 1.0f);
-
-	if (b.leftfeettouching) b.leftfootprevcontact = true; else b.leftfootprevcontact = false;
-	if (b.rightfeettouching) b.rightfootprevcontact = true; else b.rightfootprevcontact = false;
-	return -weight * slip * DT;
-}
 
 __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body,float aliver, float deadr, float yr, float reverse,
 	float fr, float targetSpeed, float stepr, float slidingPenalty, float alternatingStep, float swingClearance) {
@@ -693,16 +674,20 @@ __global__ void reward_kernel(int n, int s, replaybuffer* buffer, body* d_body,f
 
 	const bool hasFootSupport = b.leftfeettouching || b.rightfeettouching;
 	float distance_reward = 0.0f;
-	if (b.alive) {
-		const float progressReward = distreward(b, fr, reverse, targetSpeed);
-		if (hasFootSupport) distance_reward = progressReward;
-	}
-	float straightness = straightreward(b, yr) * DT;
-	float gait = b.alive ? walkreward(b, stepr, alternatingStep, swingClearance) : 0.0f;
-	float slidepenalty = b.alive ? slidingpenalty(b, slidingPenalty) : 0.0f;
+	// Keep olddist at the last supported position through a jump. Progress in
+	// the air is credited only after a supported landing, and never on a fall.
+	if (b.alive && hasFootSupport)
+		distance_reward = distreward(b, fr, reverse);
+	//floa straightness = straightreward(b, yr) * DT;
+	//float gait = b.alive ? walkreward(b, stepr, alternatingStep, swingClearance) : 0.0f;
+	//float slidepenalty = b.alive ? slidingpenalty(b, slidingPenalty) : 0.0f;
 
-	float reward = dead + distance_reward + straightness + gait + slidepenalty;
-
+	float reward = dead + distance_reward +straightreward(b,yr);
+#ifndef debug
+	if (i == 0)printf("distreward %f  \n", distance_reward);
+	if (i == 0)printf("straight : %f  \n", straightreward(b, yr));
+	if (i == 0)printf("total : %f  \n============\n", reward);
+#endif
 	buffer[bidx].reward = reward;
 
 
@@ -785,39 +770,35 @@ __device__ float boolTofloat(bool x) {
 	return x ? 1.0f : 0.0f;
 }
 
-__device__ void fill_partinput(int i, float* input, part& p) {
-	input[i] = normalize(p.pos.x-500.0f,maxdist,-maxdist);
-	input[i+1] = normalize(p.pos.y,1200.0f,-1200.0f);
-	input[i+2] = normalize(p.vel.x,maxvel,-maxvel);
-	input[i+3] = normalize(p.vel.y, maxvel, -maxvel);
-	input[i+4] = p.angle /180.0f;
-	input[i+5] = normalize(p.angvel,maxangvel,-maxangvel);
-	input[i+6] = p.mass/ maxmass;
-	input[i+7] = p.inertia/maxinertia;
+__device__ void fill_partinput(int& i, float* input, part& p, part& torso, bool isTorso) {
+	if (!isTorso)
+		input[i++] = clamp((p.pos.x - torso.pos.x) / 200.0f, -1.0f, 1.0f);
+	input[i++] = normalize(p.pos.y, 1200.0f, -1200.0f);
+	input[i++] = clamp(p.vel.x / 500.0f, -1.0f, 1.0f);
+	input[i++] = clamp(p.vel.y / 1000.0f, -1.0f, 1.0f);
+	if (isTorso) {
+		input[i++] = p.angle / 180.0f;
+		input[i++] = clamp(p.angvel / 10.0f, -1.0f, 1.0f);
+	}
 	
 
 	
 }
-__device__ void fill_jointinput(int i, float* input, joint& j) {
-	input[i] = normalize(j.targetangle,j.maxangle,j.minangle);
-	input[i + 1] = j.strength / maxjointstrength;
+__device__ void fill_jointinput(int& i, float* input, joint& j) {
+	input[i++] = normalize(j.targetangle, j.maxangle, j.minangle);
+	input[i++] = j.strength / maxjointstrength;
 	float relativeAngle = (j.child->angle - j.parent->angle) * degtorad;
 	relativeAngle = atan2f(sinf(relativeAngle), cosf(relativeAngle)) * radtodeg;
-	input[i + 2] = normalize(relativeAngle, j.maxangle, j.minangle);
+	input[i++] = normalize(relativeAngle, j.maxangle, j.minangle);
 
 	float relativeAngvel = j.child->angvel - j.parent->angvel;
-	input[i + 3] = clamp(relativeAngvel / (2.0f * maxangvel), -1.0f, 1.0f);
-
-	float target = clamp(j.targetangle, j.minangle, j.maxangle);
-	float targetError = (target - relativeAngle) * degtorad;
-	targetError = atan2f(sinf(targetError), cosf(targetError)) * radtodeg;
-	input[i + 4] = clamp(targetError / (j.maxangle - j.minangle), -1.0f, 1.0f);
+	input[i++] = clamp(relativeAngvel / 20.0f, -1.0f, 1.0f);
 }
 
 
 __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights,
 	const float* __restrict__ bias, float* nodevals, const Layer* layer, bool isactor,
-	replaybuffer* buffer, int s, curandState* rng, bool sampleActions
+	replaybuffer* buffer, int s, curandState* rng, bool sampleActions, float targetSpeed
 
 ) {
 
@@ -842,28 +823,36 @@ __global__ void netkernel(int n, body* d_body, const float* __restrict__ weights
 
 
 			float input[inputs] = { 0 };
-			input[0] = 0.125f;
-			fill_partinput(1, input, b.torso);
-			fill_partinput(9, input, b.leftthigh);
-			fill_partinput(17, input, b.rightthigh);
-			fill_partinput(25, input, b.leftshin);
-			fill_partinput(33, input, b.rightshin);
-			fill_partinput(41, input, b.leftfoot);
-			fill_partinput(49, input, b.rightfoot);
+			int inputIndex = 0;
+			fill_partinput(inputIndex, input, b.torso, b.torso, true);
+			fill_partinput(inputIndex, input, b.leftthigh, b.torso, false);
+			fill_partinput(inputIndex, input, b.rightthigh, b.torso, false);
+			fill_partinput(inputIndex, input, b.leftshin, b.torso, false);
+			fill_partinput(inputIndex, input, b.rightshin, b.torso, false);
+			fill_partinput(inputIndex, input, b.leftfoot, b.torso, false);
+			fill_partinput(inputIndex, input, b.rightfoot, b.torso, false);
 
-			fill_jointinput(57, input, b.lefthip);
-			fill_jointinput(62, input, b.righthip);
-			fill_jointinput(67, input, b.leftknee);
-			fill_jointinput(72, input, b.rightknee);
-			fill_jointinput(77, input, b.leftankle);
-			fill_jointinput(82, input, b.rightankle);
-			input[87] = boolTofloat(b.leftfeettouching);
-			input[88] = boolTofloat(b.rightfeettouching);
-			input[89] = boolTofloat(b.torsotouchingground);
-			input[90] = boolTofloat(b.leftshintouching);
-			input[91] = boolTofloat(b.rightshintouching);
-			input[92] = boolTofloat(b.rightthightouching);
-			input[93] = boolTofloat(b.leftthightouching);
+			fill_jointinput(inputIndex, input, b.lefthip);
+			fill_jointinput(inputIndex, input, b.righthip);
+			fill_jointinput(inputIndex, input, b.leftknee);
+			fill_jointinput(inputIndex, input, b.rightknee);
+			fill_jointinput(inputIndex, input, b.leftankle);
+			fill_jointinput(inputIndex, input, b.rightankle);
+			input[inputIndex++] = boolTofloat(b.leftfeettouching);
+			input[inputIndex++] = boolTofloat(b.rightfeettouching);
+			input[inputIndex++] = boolTofloat(b.torsotouchingground);
+			input[inputIndex++] = boolTofloat(b.leftshintouching);
+			input[inputIndex++] = boolTofloat(b.rightshintouching);
+			input[inputIndex++] = boolTofloat(b.rightthightouching);
+			input[inputIndex++] = boolTofloat(b.leftthightouching);
+			input[inputIndex++] = boolTofloat(b.leftfootswinging);
+			input[inputIndex++] = boolTofloat(b.rightfootswinging);
+			input[inputIndex++] = clamp(b.leftfoottakeoffrelx / 200.0f, -1.0f, 1.0f);
+			input[inputIndex++] = clamp(b.rightfoottakeoffrelx / 200.0f, -1.0f, 1.0f);
+			input[inputIndex++] = boolTofloat(b.lastStepFoot == 0);
+			input[inputIndex++] = boolTofloat(b.lastStepFoot == 1);
+			input[inputIndex++] = boolTofloat(b.lastStepFoot == 2);
+			input[inputIndex++] = clamp(targetSpeed / 500.0f, 0.0f, 1.0f);
 
 
 				
@@ -948,6 +937,7 @@ __global__ void getdone(int n, body* b, replaybuffer* buffer, int s,bool ld) {
 			b[i].alive = true;
 		}
 	}
+
 
 	if (b[i].torso.pos.x > maxdist) {
 		printf(" max dist reached \n");
@@ -1180,12 +1170,12 @@ void net(int s, bool isactor) {
 		// noise at every 120 Hz tick.
 		netkernel << <blocks(robot_count), threads >> > (robot_count, d_bodies,
 			d_actor_weights, d_actor_bias, d_antity_nodevals, d_actlayer, isactor,
-			d_state, s, d_rngstate, training);
+			d_state, s, d_rngstate, training, targetForwardSpeed);
 	}
 	else {
 		netkernel << <blocks(robot_count), threads >> > (robot_count, d_bodies,
 			d_critic_weights, d_critic_bias, d_antity_nodevals, d_critlayer, isactor,
-			d_state, s, d_rngstate, false);
+			d_state, s, d_rngstate, false, targetForwardSpeed);
 
 	}
 
@@ -1334,10 +1324,11 @@ void copywbtogpu() {
 }
 void restart() {
 	save_weights();
+
 	unregistervbo();
-#if usecuda
+
 	freedevmem();
-#endif
+
 	cudafree();
 	printf("memfree on restart \n");
 	robot_count = sample_robot_count;
@@ -1355,10 +1346,13 @@ void restart() {
 	critic_nodedatasize = 0;
 	actor_layers = 0;
 	critic_layers = 0;
+	actor_layerdata.clear();
+	critic_layerdata.clear();
 	printf("variable reset \n");
 	initrobot(robot_count);
 
 	initnetwork();
+
 
 
 
@@ -1368,7 +1362,7 @@ void initnetwork() {
 	replaybuffersize -= replaybuffersize % robot_count;
 	initlayers();
 	setconst();
-	initWB(-0.5f, 0.5f);
+	initWB();
 	allocatenetmem();
 	copywbtogpu();
 	allocate();
@@ -1397,6 +1391,7 @@ void cudafree() {
 	cudaFree(actor_adam_bias);
 	cudaFree(critic_adam_weights);
 	cudaFree(critic_adam_bias);
+	cudaFree(d_rngstate);
 
 
 }
